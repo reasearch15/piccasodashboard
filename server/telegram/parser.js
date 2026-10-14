@@ -1,7 +1,8 @@
 'use strict';
-// Incoming-payment parsers. Chime uses the real "Larry's BOT" format
-// (chime-v1). Venmo still uses the PROVISIONAL format below until real samples
-// exist. Both are deliberately strict: anything else is never guessed.
+// Incoming-payment parsers for Larry's BOT notifications. Chime uses chime-v1.
+// Venmo uses venmo-v1 (same multiline layout) ONLY when PICASSO_VENMO_PARSER=
+// venmo-v1 is set explicitly; the default "review" keeps every Venmo message in
+// Admin Attention. All parsers are strict: anything else is never guessed.
 //
 // ---- Chime (chime-v1), from a real sample ----------------------------------
 //
@@ -30,16 +31,20 @@ const cleanName = raw => {
   return n;
 };
 
-function parseChimeMessage(text) {
+// One strict grammar for Larry's multiline notifications. Only the greeting
+// differs per method. The payment is the single "You received $X from NAME"
+// line; time and Total In / Total Out lines are recognised and skipped (they
+// are running totals, never payments); any other line rejects the message.
+function parseLarryMessage(text, { greeting, version, recipient }) {
   if (typeof text !== 'string' || !text.trim()) return { ok: false, reason: 'no_text' };
   if (text.length > 1000) return { ok: false, reason: 'too_long' };
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  let tag = null, received = null;
+  let greet = null, received = null;
   for (const line of lines) {
     let m;
-    if ((m = CHIME_GREETING.exec(line))) {
-      if (tag !== null) return { ok: false, reason: 'ambiguous_recipient' };
-      tag = m.groups.tag;
+    if ((m = greeting.exec(line))) {
+      if (greet !== null) return { ok: false, reason: 'ambiguous_recipient' };
+      greet = m.groups;
     } else if ((m = CHIME_RECEIVED.exec(line))) {
       if (received) return { ok: false, reason: 'ambiguous_amount' };
       received = m.groups;
@@ -51,13 +56,32 @@ function parseChimeMessage(text) {
   }
   // Every line was a known non-payment line (greeting/time/totals only).
   if (!received) return { ok: false, reason: 'summary_only' };
-  if (!tag) return { ok: false, reason: 'missing_recipient' };
+  if (!greet) return { ok: false, reason: 'missing_recipient' };
   const name = cleanName(received.name);
   if (name.replace(/[^\p{L}]/gu, '').length < 2) return { ok: false, reason: 'missing_sender' };
   const amountCents = Number(received.dollars.replace(/,/g, '')) * 100 + Number((received.cents || '').padEnd(2, '0'));
   if (!Number.isSafeInteger(amountCents) || amountCents <= 0) return { ok: false, reason: 'invalid_amount' };
   if (amountCents > MAX_CENTS) return { ok: false, reason: 'amount_out_of_range' };
-  return { ok: true, name, amountCents, recipient: `$${tag}`, parserVersion: CHIME_PARSER_VERSION };
+  return { ok: true, name, amountCents, recipient: recipient(greet), parserVersion: version };
+}
+
+function parseChimeMessage(text) {
+  return parseLarryMessage(text, { greeting: CHIME_GREETING, version: CHIME_PARSER_VERSION, recipient: g => `$${g.tag}` });
+}
+
+// ---- Venmo (venmo-v1, explicit opt-in) ---------------------------------------
+// Same layout as chime-v1. The greeting may carry the recipient as a cash-tag
+// style "$Tag" or a Venmo "@handle"; nothing else is accepted.
+//
+//   🟢 Hi @Test-Handle,
+//   You received $20.0 from Test Payer.
+//   09:15 AM - 15 Oct 2026
+//   ➕ Total In: 35.00$
+//   ➖ Total Out: 0.00$
+const VENMO_PARSER_VERSION = 'venmo-v1';
+const VENMO_GREETING = /^(?:\p{Extended_Pictographic}\uFE0F?\s*)?Hi (?<sigil>[$@])(?<tag>[A-Za-z0-9][A-Za-z0-9_-]{0,63}),?$/u;
+function parseVenmoMessage(text) {
+  return parseLarryMessage(text, { greeting: VENMO_GREETING, version: VENMO_PARSER_VERSION, recipient: g => `${g.sigil}${g.tag}` });
 }
 
 // ---- Venmo (provisional) ---------------------------------------------------
@@ -147,7 +171,9 @@ function classifyMessage(text, method = 'Venmo', { venmoParser = 'provisional' }
   if (typeof text !== 'string' || !text.trim()) return { kind: 'none', reason: 'no_text' };
   // Checked first: a cash-out request is never a payment or an attention item.
   if (isCashoutRequest(text)) return { kind: 'cashout_request', reason: 'cashout_request' };
-  const payment = method === 'Chime' ? parseChimeMessage(text) : parsePaymentMessage(text);
+  const payment = method === 'Chime' ? parseChimeMessage(text)
+    : venmoParser === 'venmo-v1' ? parseVenmoMessage(text)
+    : parsePaymentMessage(text);
   // Unverified Venmo: even a message that looks like a payment is only held
   // for review, never turned into a payment, and no amount is asserted.
   if (method === 'Venmo' && venmoParser === 'review' && payment.ok) {
@@ -163,4 +189,4 @@ function classifyMessage(text, method = 'Venmo', { venmoParser = 'provisional' }
   return { kind: 'none', reason: payment.reason };
 }
 
-module.exports = { parsePaymentMessage, parseChimeMessage, classifyMessage, isCashoutRequest, PARSER_VERSION, CHIME_PARSER_VERSION };
+module.exports = { parsePaymentMessage, parseChimeMessage, parseVenmoMessage, classifyMessage, isCashoutRequest, PARSER_VERSION, CHIME_PARSER_VERSION, VENMO_PARSER_VERSION };

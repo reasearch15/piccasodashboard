@@ -63,7 +63,7 @@ function loadTelegramConfig(env = process.env) {
   // Venmo has no verified real format yet. "review" (default) sends every
   // money-like Venmo message to Admin Attention; "provisional" is for local tests only.
   const venmoParser = env.PICASSO_VENMO_PARSER || 'review';
-  if (!['review', 'provisional'].includes(venmoParser)) errors.push('PICASSO_VENMO_PARSER must be review or provisional.');
+  if (!['review', 'venmo-v1', 'provisional'].includes(venmoParser)) errors.push('PICASSO_VENMO_PARSER must be review, venmo-v1 or provisional.');
 
   if (errors.length) throw new Error(`Invalid Telegram configuration:\n - ${errors.join('\n - ')}`);
 
@@ -105,7 +105,7 @@ function loadListenerConfig(env = process.env) {
   const maxAge = env.PICASSO_LISTENER_MAX_AGE_HOURS === undefined || env.PICASSO_LISTENER_MAX_AGE_HOURS === '' ? 12 : Number(env.PICASSO_LISTENER_MAX_AGE_HOURS);
   if (!Number.isInteger(maxAge) || maxAge < 1 || maxAge > 168) errors.push('PICASSO_LISTENER_MAX_AGE_HOURS must be a whole number of hours from 1 to 168.');
   const venmoParser = env.PICASSO_VENMO_PARSER || 'review';
-  if (!['review', 'provisional'].includes(venmoParser)) errors.push('PICASSO_VENMO_PARSER must be review or provisional.');
+  if (!['review', 'venmo-v1', 'provisional'].includes(venmoParser)) errors.push('PICASSO_VENMO_PARSER must be review, venmo-v1 or provisional.');
   if (errors.length) throw new Error(`Invalid listener configuration:\n - ${errors.join('\n - ')}`);
   return {
     enabled: true,

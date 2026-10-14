@@ -263,6 +263,7 @@ class DemoLedger {
         id: r.id, method: r.method, eventType: r.event_type, amountCents: r.amount_cents, reason: r.reason,
         originalText: r.original_text, messageAt: r.message_at, createdAt: r.created_at, parserVersion: r.parser_version,
         status: r.status, ignoredAt: r.ignored_at, ignoredById: r.ignored_by_id, ignoredBy: r.ignored_by,
+        resolution: r.resolution ?? null, resolvedPaymentId: r.resolved_payment_id ?? null,
       })),
     };
   }
@@ -274,6 +275,32 @@ class DemoLedger {
     if (r.changes) return { changed: true };
     if (!this.db.prepare('SELECT 1 FROM attention_events WHERE id = ?').get(id)) throw err(404, 'Attention event not found.');
     return { changed: false };
+  }
+
+  // Approved reconciliation of one Admin Attention event into a PENDING payment
+  // (server/reconcile-attention.js). In one transaction: the event must still
+  // be pending and match; no payment may exist for the same Telegram message;
+  // the payment keeps the original Telegram time and source identity; the event
+  // is kept (original text and all) and marked resolved with a link to it.
+  reconcileAttentionToPayment({ eventId, chatId, messageId, parsed, admin }) {
+    return transaction(this.db, () => {
+      const ev = this.db.prepare('SELECT * FROM attention_events WHERE id = ?').get(eventId);
+      if (!ev || ev.source_chat_id !== String(chatId) || ev.source_message_id !== messageId) return { outcome: 'skipped_mismatch' };
+      if (ev.status !== 'pending') return { outcome: 'skipped_not_pending' };
+      if (this.db.prepare('SELECT 1 FROM demo_payments WHERE source_chat_id = ? AND source_message_id = ?').get(String(chatId), messageId)) {
+        return { outcome: 'skipped_payment_exists' };
+      }
+      const id = this.nextId('in');
+      this.db.prepare(`INSERT INTO demo_payments (id, method, name, amount_cents, status, received_at, source, source_chat_id, source_message_id, parser_version, created_at, recipient_tag)
+                       VALUES (?, ?, ?, ?, 'pending', ?, 'telegram', ?, ?, ?, ?, ?)`)
+        .run(id, ev.method, parsed.name, parsed.amountCents, ev.message_at, String(chatId), messageId, parsed.parserVersion, new Date().toISOString(), parsed.recipient ?? null);
+      const r = this.db.prepare(`UPDATE attention_events SET status = 'ignored', ignored_at = ?, ignored_by_id = ?, ignored_by = ?,
+                                   resolution = 'reconciled_to_payment', resolved_payment_id = ?
+                                 WHERE id = ? AND status = 'pending'`).run(new Date().toISOString(), admin.id, admin.username, id, eventId);
+      if (r.changes !== 1) throw new Error('attention event changed during reconciliation');
+      this.logTelegramEvent({ kind: 'reconciliation', outcome: 'attention_reconciled', chatId: String(chatId), messageId, refId: id, detail: `event=${eventId} by=${admin.username}`.slice(0, 200) });
+      return { outcome: 'converted', paymentId: id };
+    });
   }
 
   findCashoutByCallbackToken(token) {

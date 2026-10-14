@@ -93,12 +93,12 @@ function makeInstall({ v2Change = 'touch' } = {}) {
   else {
     const dbjs = path.join(work, 'server', 'db.js');
     // End of LEDGER_MIGRATIONS (its last statement).
-    const anchor = "WHERE request_no IS NOT NULL;`,\n];";
+    const anchor = "ADD COLUMN resolved_payment_id TEXT;`,\n];";
     const src = fs.readFileSync(dbjs, 'utf8');
     assert.ok(src.split(anchor).length === 2, 'migration anchor present exactly once');
     const extra = v2Change === 'additive-migration'
-      ? "WHERE request_no IS NOT NULL;`,\n  `ALTER TABLE demo_payments ADD COLUMN test_note TEXT;`,\n];"
-      : "WHERE request_no IS NOT NULL;`,\n  `UPDATE demo_cashouts SET name = name;`,\n];";
+      ? "ADD COLUMN resolved_payment_id TEXT;`,\n  `ALTER TABLE demo_payments ADD COLUMN test_note TEXT;`,\n];"
+      : "ADD COLUMN resolved_payment_id TEXT;`,\n  `UPDATE demo_cashouts SET name = name;`,\n];";
     fs.writeFileSync(dbjs, src.replace(anchor, extra));
   }
   sh(work, `${git} commit -qam v2 && git push -q origin main`);

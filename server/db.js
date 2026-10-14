@@ -211,6 +211,10 @@ const LEDGER_MIGRATIONS = [
    ALTER TABLE demo_cashouts_v6 RENAME TO demo_cashouts;
    CREATE UNIQUE INDEX demo_cashouts_callback ON demo_cashouts(callback_token) WHERE callback_token IS NOT NULL;
    CREATE UNIQUE INDEX demo_cashouts_request_no ON demo_cashouts(request_no) WHERE request_no IS NOT NULL;`,
+  // v7: an Admin Attention event can be resolved by an approved reconciliation.
+  // The event and its original text are kept; it links to the payment created.
+  `ALTER TABLE attention_events ADD COLUMN resolution TEXT;
+   ALTER TABLE attention_events ADD COLUMN resolved_payment_id TEXT;`,
 ];
 
 function migrate(db, migrations) {
