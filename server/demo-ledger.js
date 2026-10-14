@@ -62,7 +62,7 @@ const PUBLIC_REMOVAL = { none: null, pending: 'pending', deleted: 'removed', alr
 
 // What the dashboard may see about Telegram delivery: a coarse status only,
 // never chat IDs, message IDs or error text.
-const PUBLIC_DELIVERY = { not_required: null, queued: 'pending', sending: 'pending', retrying: 'retrying', sent: 'delivered', failed: 'failed', skipped: null };
+const PUBLIC_DELIVERY = { not_required: null, queued: 'queued', sending: 'sending', retrying: 'queued', sent: 'sent', failed: 'failed', skipped: null };
 
 class DemoLedger {
   constructor(db, { mode = 'demo', paymentStartMs = null, paymentStartRaw = null } = {}) {
@@ -179,6 +179,7 @@ class DemoLedger {
     if (!Core.METHODS.includes(method)) throw err(400, 'Choose Venmo or Chime.');
     if (test && amountCents === null) throw err(400, 'A test cash-out must be exactly $0.00.');
     if (!trimmed || trimmed.length > 80 || /[\u0000-\u001f\u007f]/.test(trimmed) || amountCents === null) throw err(400, 'Enter a valid name and positive amount with no more than two decimals.');
+    const queueDelivery = deliver && !test;
     return transaction(this.db, () => {
       const id = this.nextId('out');
       const requestNo = Number(this.meta('cashout_no') || 0) + 1;
@@ -187,7 +188,7 @@ class DemoLedger {
                          request_no, delivery_status, delivery_next_at, callback_token, is_test)
                        VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, method, trimmed, amountCents, new Date().toISOString(), user.id, user.username, requestNo,
-          deliver ? 'queued' : 'not_required', deliver ? Date.now() : null, deliver ? crypto.randomBytes(16).toString('hex') : null, test ? 1 : 0);
+          queueDelivery ? 'queued' : 'not_required', queueDelivery ? Date.now() : null, queueDelivery ? crypto.randomBytes(16).toString('hex') : null, test ? 1 : 0);
       return id;
     });
   }
@@ -358,7 +359,7 @@ class DemoLedger {
     const token = crypto.randomBytes(16).toString('hex');
     const r = this.db.prepare(`UPDATE demo_cashouts SET delivery_status = 'queued', delivery_attempts = 0,
                                  delivery_next_at = ?, callback_token = ?
-                               WHERE id = ? AND status = 'pending' AND delivery_status = 'not_required'
+                               WHERE id = ? AND status = 'pending' AND is_test = 0 AND delivery_status = 'not_required'
                                  AND telegram_chat_id IS NULL AND telegram_message_id IS NULL AND callback_token IS NULL`)
       .run(Date.now(), token, id);
     if (!r.changes) throw err(409, 'Only an undelivered pending cash-out created while Telegram was off can be queued.');

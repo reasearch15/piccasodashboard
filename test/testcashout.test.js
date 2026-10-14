@@ -12,7 +12,6 @@ const { startServer, randomPassword } = require('./helpers');
 const { startMockTelegram } = require('./mock-telegram');
 const { LEDGER_MIGRATIONS, openLedgerDb } = require('../server/db');
 const { DemoLedger, parseCents } = require('../server/demo-ledger');
-const { isCashoutRequest } = require('../server/telegram/parser');
 
 describe('$0.00 TEST cash-outs (dashboard, demo ledger)', () => {
   let srv, admin, staff;
@@ -98,6 +97,7 @@ describe('$0.00 TEST cash-outs (dashboard, demo ledger)', () => {
     assert.match(js, /o\.isTest\?'TEST — \$0\.00':money\(o\.amountCents\)/);
     assert.match(js, /test-pill">TEST — \$0\.00/);
     assert.match(js, /\$\{admin\(\)\?'<label><input id="test-cashout"/);
+    assert.doesNotMatch(js, /Send to Telegram|queuedelivery/);
   });
 });
 
@@ -105,11 +105,6 @@ describe('$0.00 TEST cash-outs through the Telegram workflow (mocked)', () => {
   const TOKEN = `${100000 + crypto.randomInt(800000)}:${crypto.randomBytes(27).toString('base64url')}`;
   const CH = { chimeIn: '-1003000000001', venmoIn: '-1003000000002', chimeOut: '-1003000000003', venmoOut: '-1003000000004' };
   let tg, srv, admin;
-  const press = o => srv.telegram.handleUpdate({
-    update_id: Date.now(), callback_query: { id: 'cq', data: `c:${o.callbackToken}`, from: { id: 111, is_bot: false, first_name: 'Ops' },
-      message: { message_id: o.telegramMessageId, chat: { id: Number(o.telegramChatId) }, from: { id: 424242, is_bot: true } } },
-  });
-
   before(async () => {
     tg = await startMockTelegram(TOKEN);
     srv = await startServer({
@@ -124,23 +119,16 @@ describe('$0.00 TEST cash-outs through the Telegram workflow (mocked)', () => {
   });
   after(async () => { await srv.close(); await tg.close(); });
 
-  it('delivers a clearly labelled message, completes via the button, and never counts', async () => {
+  it('never sends a TEST request to Telegram and never counts it', async () => {
     const before = (await admin.get('/api/calculations')).json.totals;
+    const sendsBefore = tg.callsOf('sendMessage').length;
     const id = (await admin.post('/api/cashouts', { method: 'Chime', name: '@test-tg', amount: '0.00', test: true })).json.id;
     await srv.telegram.processOutbox();
-    const sent = tg.callsOf('sendMessage').at(-1).params;
-    assert.equal(String(sent.chat_id), CH.chimeOut, 'routed like any Chime request');
-    assert.match(sent.text, /^PICASSO CASH OUT\nTEST REQUEST: not a real payment, do not send money\n/);
-    assert.match(sent.text, /Amount: TEST — \$0\.00/);
-    assert.ok(isCashoutRequest(sent.text), 'still recognised as our own cash-out post in shared groups');
-    assert.equal(sent.reply_markup.inline_keyboard[0][0].text, 'Completed');
     const o = srv.ledger.getCashout(id);
-    assert.equal((await admin.get('/api/cashouts')).json.cashouts.find(x => x.id === id).deliveryStatus, 'delivered');
-    await press(o);
-    assert.equal(srv.ledger.getCashout(id).status, 'done');
-    await srv.telegram.processOutbox();
-    const edit = tg.callsOf('editMessageText').at(-1).params;
-    assert.match(edit.text, /TEST REQUEST[\s\S]*Amount: TEST — \$0\.00[\s\S]*Status: COMPLETED/);
+    assert.equal(o.deliveryStatus, 'not_required');
+    assert.equal(o.callbackToken, null);
+    assert.equal(tg.callsOf('sendMessage').length, sendsBefore);
+    assert.equal((await admin.get('/api/cashouts')).json.cashouts.find(x => x.id === id).deliveryStatus, null);
     assert.deepEqual((await admin.get('/api/calculations')).json.totals, before);
   });
 

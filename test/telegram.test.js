@@ -168,12 +168,26 @@ describe('Telegram bridge (mocked Bot API)', () => {
     assert.ok(!button.callback_data.includes(c.id));
     assert.match(sends[1].params.text, /Method: Venmo[\s\S]*Requested by: CharsiNew/);
     const shown = await cashout(c.id);
-    assert.deepEqual([shown.status, shown.deliveryStatus, shown.createdById], ['pending', 'delivered', staffId]);
+    assert.deepEqual([shown.status, shown.deliveryStatus, shown.createdById], ['pending', 'sent', staffId]);
     assert.ok(!JSON.stringify(shown).includes(CHATS.chimeOut));
     const stored = srv.ledger.getCashout(c.id);
     assert.equal(stored.telegramChatId, CHATS.chimeOut);
     assert.equal(stored.telegramMessageId, sends[0].params && tg.state.nextMessageId - 1);
     assert.equal((await staff.post(`/api/cashouts/${c.id}/complete`)).status, 409, 'dashboard cannot complete when Telegram is on');
+  });
+
+  it('7b. creation immediately kicks the outbox without a manual delivery action', async () => {
+    tg.state.calls.length = 0;
+    srv.telegram.running = true;
+    try {
+      const c = await staff.post('/api/cashouts', { method: 'Chime', name: '@automatic-chime', amount: '2.00' });
+      const v = await staff.post('/api/cashouts', { method: 'Venmo', name: '@automatic-venmo', amount: '3.00' });
+      assert.deepEqual([c.status, v.status], [201, 201]);
+      const deadline = Date.now() + 2000;
+      while (tg.callsOf('sendMessage').length < 2 && Date.now() < deadline) await new Promise(r => setTimeout(r, 10));
+      assert.deepEqual(tg.callsOf('sendMessage').map(x => String(x.params.chat_id)), [CHATS.chimeOut, CHATS.venmoOut]);
+      assert.deepEqual([(await cashout(c.json.id)).deliveryStatus, (await cashout(v.json.id)).deliveryStatus], ['sent', 'sent']);
+    } finally { srv.telegram.running = false; }
   });
 
   it('8. delivery failures retry without completing or duplicating the cash-out', async () => {
@@ -195,7 +209,7 @@ describe('Telegram bridge (mocked Bot API)', () => {
     assert.equal((await admin.post(`/api/cashouts/${id}/retry-delivery`)).status, 204);
     await srv.telegram.processOutbox();
     o = await cashout(id);
-    assert.deepEqual([o.status, o.deliveryStatus], ['pending', 'delivered']);
+    assert.deepEqual([o.status, o.deliveryStatus], ['pending', 'sent']);
     assert.equal(srv.ledger.db.prepare('SELECT COUNT(*) n FROM demo_cashouts').get().n, countBefore + 1);
   });
 
@@ -266,7 +280,7 @@ describe('Telegram bridge (mocked Bot API)', () => {
     const sends = tg.callsOf('sendMessage');
     assert.equal(sends.length, 1);
     assert.equal(String(sends[0].params.chat_id), CHATS.chimeOut);
-    assert.equal((await cashout(id)).deliveryStatus, 'delivered');
+    assert.equal((await cashout(id)).deliveryStatus, 'sent');
   });
 
   it('11. repeated callbacks / duplicate updates do not double-count', async () => {

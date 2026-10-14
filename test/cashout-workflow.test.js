@@ -1,6 +1,6 @@
 'use strict';
-// Outgoing Telegram cash-out workflow, run for BOTH a $0.00 TEST request and a
-// real request: delivery, Completed button, cancellation (queued / in flight /
+// Outgoing Telegram cash-out workflow for real requests: delivery, Completed
+// button, cancellation (queued / in flight /
 // delivered), message deletion and retries, stale buttons, permissions and
 // idempotency. Production-shaped setup (production ledger, shared incoming and
 // cash-out groups); Telegram is a local mock.
@@ -22,13 +22,11 @@ const ENV = base => ({
   PICASSO_TELEGRAM_ALLOW_SHARED_GROUPS: 'true', PICASSO_TELEGRAM_COMPLETER_IDS: String(COMPLETER),
 });
 // Each kind of request under test: how to create it and what it may change.
-const KINDS = [
-  { label: 'TEST $0.00', body: m => ({ method: m, name: '@workflow-test', amount: '0.00', test: true }), cents: 0, isTest: true },
-  { label: 'real', body: m => ({ method: m, name: '@workflow-real', amount: '12.34' }), cents: 1234, isTest: false },
-];
+const TEST_KIND = { label: 'TEST $0.00', body: m => ({ method: m, name: '@workflow-test', amount: '0.00', test: true }), cents: 0, isTest: true };
+const KINDS = [{ label: 'real', body: m => ({ method: m, name: '@workflow-real', amount: '12.34' }), cents: 1234, isTest: false }];
 let updateId = 90000;
 
-describe('Outgoing cash-out workflow (TEST and real)', () => {
+describe('Outgoing cash-out workflow', () => {
   let tg, srv, admin, staff;
   const totals = async () => (await admin.get('/api/calculations')).json.totals;
   const view = async id => (await admin.get('/api/cashouts')).json.cashouts.find(o => o.id === id);
@@ -72,7 +70,7 @@ describe('Outgoing cash-out workflow (TEST and real)', () => {
       it('is delivered once to the correct shared group, correctly labelled, and tracked', async () => {
         for (const [method, chat] of [['Chime', CHIME], ['Venmo', VENMO]]) {
           const id = await create(kind, method);
-          assert.equal((await view(id)).deliveryStatus, 'pending');
+          assert.equal((await view(id)).deliveryStatus, 'queued');
           await srv.telegram.processOutbox();
           await srv.telegram.processOutbox(); // a second pass must not resend
           const sends = sendsTo(id);
@@ -89,7 +87,7 @@ describe('Outgoing cash-out workflow (TEST and real)', () => {
             assert.match(text, /\nAmount: \$12\.34\n/);
           }
           const v = await view(id);
-          assert.deepEqual([v.deliveryStatus, v.isTest, v.amountCents], ['delivered', kind.isTest, kind.cents]);
+          assert.deepEqual([v.deliveryStatus, v.isTest, v.amountCents], ['sent', kind.isTest, kind.cents]);
           assert.match(v.requestId, /^CO-\d{6}$/);
         }
       });
@@ -131,6 +129,7 @@ describe('Outgoing cash-out workflow (TEST and real)', () => {
         const outbox = srv.telegram.processOutbox();
         await new Promise(r => setTimeout(r, 40)); // the send is now in flight
         assert.equal(srv.ledger.db.prepare('SELECT delivery_status s FROM demo_cashouts WHERE id = ?').get(id).s, 'sending');
+        assert.equal((await view(id)).deliveryStatus, 'sending');
         assert.equal((await admin.post(`/api/cashouts/${id}/cancel`)).status, 204);
         await outbox;
         delete tg.state.delayMs.sendMessage;
@@ -229,13 +228,25 @@ describe('Outgoing cash-out workflow (TEST and real)', () => {
     });
   }
 
+  it('TEST requests are persisted but never queued or sent to Telegram', async () => {
+    const before = tg.callsOf('sendMessage').length;
+    const id = await create(TEST_KIND, 'Chime');
+    await srv.telegram.processOutbox();
+    const o = srv.ledger.getCashout(id);
+    assert.equal(o.deliveryStatus, 'not_required');
+    assert.equal(o.callbackToken, null);
+    assert.equal(tg.callsOf('sendMessage').length, before);
+    assert.equal((await view(id)).deliveryStatus, null);
+  });
+
   it('settlement: completed real requests are included, completed TEST requests never are', async () => {
     // A real accepted Chime payment to settle against.
     const pay = srv.ledger.createIncomingPayment({ method: 'Chime', name: 'Settlement Payer', amountCents: 500000, receivedAt: new Date().toISOString(), chatId: CHIME, messageId: 1, parserVersion: 'chime-v1' });
     assert.equal((await staff.post(`/api/payments/${pay.id}/accept`)).status, 204);
-    const t = await delivered(KINDS[0]);
-    const r = await delivered(KINDS[1]);
-    await press(t);
+    const testId = await create(TEST_KIND);
+    srv.ledger.completeCashout(testId, { id: 'admin-test', username: 'CharsiNew' });
+    const t = srv.ledger.getCashout(testId);
+    const r = await delivered(KINDS[0]);
     await press(r);
     const res = await admin.post('/api/settlements', { paymentId: pay.id });
     assert.equal(res.status, 201, JSON.stringify(res.json));
@@ -249,7 +260,7 @@ describe('Outgoing cash-out workflow (TEST and real)', () => {
   });
 
   it('only admins may create TEST requests (staff real requests still work)', async () => {
-    assert.equal((await staff.post('/api/cashouts', KINDS[0].body('Chime'))).status, 403);
-    assert.equal((await staff.post('/api/cashouts', KINDS[1].body('Chime'))).status, 201);
+    assert.equal((await staff.post('/api/cashouts', TEST_KIND.body('Chime'))).status, 403);
+    assert.equal((await staff.post('/api/cashouts', KINDS[0].body('Chime'))).status, 201);
   });
 });

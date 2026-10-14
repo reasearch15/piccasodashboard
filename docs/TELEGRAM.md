@@ -25,6 +25,7 @@ Dashboard ◀── SSE /api/events ("payments/cashouts changed") ── reloads
 Key safety properties:
 
 * Cash-outs are **saved before** any Telegram call. Delivery status (`queued → sending → sent`, or `retrying → failed`) is separate from financial status (`pending → done | cancelled`).
+* Real cash-outs are queued automatically at creation and immediately wake the serialized outbox. Explicit TEST requests are persisted locally with `not_required` delivery and are never sent to Telegram.
 * `pending → done` and `pending → cancelled` are single conditional `UPDATE … WHERE status='pending'` statements, so they are mutually exclusive and repeat clicks are no-ops.
 * Message edits are retried independently and can never reverse a completion.
 * Incoming payments are deduplicated by a unique `(chat_id, message_id)` index.

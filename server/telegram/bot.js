@@ -20,6 +20,7 @@ class TelegramBot {
     this.botId = null;
     this.running = false;
     this.outboxBusy = null;
+    this.outboxRerun = false;
   }
 
   // ---- lifecycle -------------------------------------------------------
@@ -196,7 +197,16 @@ class TelegramBot {
 
   processOutbox() {
     // Serialised so one row is never sent twice concurrently.
-    this.outboxBusy ??= this.runOutbox().finally(() => { this.outboxBusy = null; });
+    if (this.outboxBusy) {
+      this.outboxRerun = true;
+      return this.outboxBusy;
+    }
+    this.outboxBusy = (async () => {
+      do {
+        this.outboxRerun = false;
+        await this.runOutbox();
+      } while (this.outboxRerun);
+    })().finally(() => { this.outboxBusy = null; });
     return this.outboxBusy;
   }
 
