@@ -11,14 +11,14 @@ Status: **NOT DEPLOYED. NOT CONNECTED.** Everything below is gated on explicit o
 | Chime parser `chime-v1` (real format) | Built and tested on synthetic fixtures |
 | Venmo parser | **No verified format.** Venmo messages go to Admin Attention only (`venmo-review-v1`) |
 | Isolated Picasso Telethon session | **Not started. Blocker.** No listener code, no account, no session |
-| VPS deployment config for payment.altast.work | **Unknown. Blocker.** Not visible from this workstation; needs inspection on the server |
+| VPS deployment config for payment.atlast.work | **Unknown. Blocker.** Not visible from this workstation; needs inspection on the server |
 | Backups | **Blocker.** None configured |
 | Message counts from 13 Oct onward | **Unavailable.** Needs the approved listener to export messages, then `server/backfill.js` preview |
 | TeleLedger | Untouched. No Picasso code references it or any session file |
 
 ## Stages (each needs approval)
 
-1. **Inspect the VPS** (read-only): how TeleLedger runs (service, user, session path), Node version (needs 24.7+), reverse proxy and TLS for payment.altast.work, free ports, disk. No changes.
+1. **Inspect the VPS** (read-only): how TeleLedger runs (service, user, session path), Node version (needs 24.7+), reverse proxy and TLS for payment.atlast.work, free ports, disk. No changes.
 2. **Set up the Picasso listener** (approval needed):
    * Separate Unix user and directory, and its **own** Telegram account and session file.
    * Never TeleLedger's session, never run while another process holds it.

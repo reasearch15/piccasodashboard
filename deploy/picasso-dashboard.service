@@ -2,7 +2,7 @@
 # Independent service: own user, own directory, own database, own port.
 # Does not reference or depend on TeleLedger, Atlas, AppBeg or any other unit.
 [Unit]
-Description=Picasso Dashboard (payment.altast.work)
+Description=Picasso Dashboard (payment.atlast.work)
 After=network-online.target
 Wants=network-online.target
 

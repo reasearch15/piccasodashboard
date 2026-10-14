@@ -53,7 +53,11 @@ const cashoutFromRow = r => ({
   settlementId: r.settlement_id, requestNo: r.request_no,
   deliveryStatus: r.delivery_status, deliveryAttempts: r.delivery_attempts, messageSyncAttempts: r.message_sync_attempts,
   telegramChatId: r.telegram_chat_id, telegramMessageId: r.telegram_message_id, callbackToken: r.callback_token,
+  telegramDeleteStatus: r.telegram_delete_status, telegramDeleteAttempts: r.telegram_delete_attempts,
 });
+
+// Coarse removal status for the dashboard (no Telegram IDs or error text).
+const PUBLIC_REMOVAL = { none: null, pending: 'pending', deleted: 'removed', already_absent: 'removed', failed: 'failed' };
 
 // What the dashboard may see about Telegram delivery: a coarse status only,
 // never chat IDs, message IDs or error text.
@@ -145,6 +149,7 @@ class DemoLedger {
       id: o.id, method: o.method, name: o.name, amountCents: o.amountCents, status: o.status,
       createdAt: o.createdAt, createdById: o.createdById, createdBy: o.createdBy, completedAt: o.completedAt,
       cancelledAt: o.cancelledAt, cancelledBy: o.cancelledBy,
+      telegramRemoval: PUBLIC_REMOVAL[o.telegramDeleteStatus] ?? null,
       completedBy: o.completedBy, requestId: o.requestNo ? requestId(o.requestNo) : null, deliveryStatus: PUBLIC_DELIVERY[o.deliveryStatus] ?? null,
       settled: o.status === 'done' && s.settlements.some(x => x.method === o.method && x.cashouts.some(t => t.id === o.id)),
     }));
@@ -195,8 +200,8 @@ class DemoLedger {
   cancelCashout(id, user) {
     const r = this.db.prepare(`UPDATE demo_cashouts SET status = 'cancelled', cancelled_at = ?, cancelled_by_id = ?, cancelled_by = ?,
                                  delivery_status = CASE WHEN delivery_status IN ('queued', 'retrying', 'failed') THEN 'skipped' ELSE delivery_status END,
-                                 message_sync_needed = CASE WHEN telegram_message_id IS NOT NULL THEN 1 ELSE 0 END,
-                                 message_sync_attempts = 0, message_sync_next_at = ?
+                                 telegram_delete_status = CASE WHEN telegram_message_id IS NOT NULL THEN 'pending' ELSE 'none' END,
+                                 telegram_delete_attempts = 0, telegram_delete_next_at = ?
                                WHERE id = ? AND status = 'pending'`).run(new Date().toISOString(), user.id, user.username, Date.now(), id);
     if (!r.changes) throw err(409, 'Only pending cash-outs can be cancelled.');
   }
@@ -289,12 +294,14 @@ class DemoLedger {
   }
 
   markDelivered(id, chatId, messageId) {
-    // If the request was cancelled while the send was in flight, the message
-    // needs an immediate edit to show CANCELLED.
+    // If the request changed while the send was in flight: completed -> the
+    // message is re-rendered; cancelled -> the new message is queued for deletion.
     this.db.prepare(`UPDATE demo_cashouts SET delivery_status = 'sent', delivered_at = ?, telegram_chat_id = ?, telegram_message_id = ?,
-                       delivery_last_error = NULL, message_sync_needed = CASE WHEN status <> 'pending' THEN 1 ELSE message_sync_needed END,
-                       message_sync_next_at = ?
-                     WHERE id = ?`).run(new Date().toISOString(), String(chatId), messageId, Date.now(), id);
+                       delivery_last_error = NULL, message_sync_needed = CASE WHEN status = 'done' THEN 1 ELSE message_sync_needed END,
+                       message_sync_next_at = ?,
+                       telegram_delete_status = CASE WHEN status = 'cancelled' THEN 'pending' ELSE telegram_delete_status END,
+                       telegram_delete_next_at = ?
+                     WHERE id = ?`).run(new Date().toISOString(), String(chatId), messageId, Date.now(), Date.now(), id);
   }
 
   markDeliveryFailed(id, error, nextAt, final) {
@@ -313,6 +320,31 @@ class DemoLedger {
   // the financial request (the orphan's button is rejected by message-ID check).
   recoverInterruptedDeliveries() {
     this.db.prepare(`UPDATE demo_cashouts SET delivery_status = 'retrying', delivery_next_at = ? WHERE delivery_status = 'sending'`).run(Date.now());
+  }
+
+  // ---- Telegram message removal for cancelled requests ----------------------
+  dueDeletions(now = Date.now()) {
+    return this.db.prepare(`SELECT * FROM demo_cashouts WHERE status = 'cancelled' AND telegram_delete_status = 'pending'
+                            AND telegram_message_id IS NOT NULL AND telegram_delete_next_at <= ? LIMIT 20`).all(now).map(cashoutFromRow);
+  }
+
+  // outcome: 'deleted' (Telegram confirmed) or 'already_absent' (Telegram
+  // reported the message no longer exists). Nothing else counts as removed.
+  markTelegramDeleted(id, outcome) {
+    this.db.prepare(`UPDATE demo_cashouts SET telegram_delete_status = ?, telegram_deleted_at = ?, telegram_delete_error = NULL
+                     WHERE id = ? AND telegram_delete_status = 'pending'`).run(outcome, new Date().toISOString(), id);
+  }
+
+  markTelegramDeleteFailed(id, error, nextAt, final) {
+    this.db.prepare(`UPDATE demo_cashouts SET telegram_delete_attempts = telegram_delete_attempts + 1, telegram_delete_next_at = ?,
+                       telegram_delete_error = ?, telegram_delete_status = CASE WHEN ? THEN 'failed' ELSE telegram_delete_status END
+                     WHERE id = ? AND telegram_delete_status = 'pending'`).run(nextAt, String(error).slice(0, 200), final ? 1 : 0, id);
+  }
+
+  retryTelegramDelete(id) {
+    const r = this.db.prepare(`UPDATE demo_cashouts SET telegram_delete_status = 'pending', telegram_delete_attempts = 0, telegram_delete_next_at = ?
+                               WHERE id = ? AND status = 'cancelled' AND telegram_delete_status = 'failed'`).run(Date.now(), id);
+    if (!r.changes) throw err(409, 'Only cancelled requests whose Telegram removal failed can be retried.');
   }
 
   dueMessageSyncs(now = Date.now()) {

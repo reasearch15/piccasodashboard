@@ -144,6 +144,14 @@ const LEDGER_MIGRATIONS = [
    );`,
   // v4: recipient identifier from real Chime messages (e.g. Kristen-Huey-1).
   `ALTER TABLE demo_payments ADD COLUMN recipient_tag TEXT;`,
+  // v5: removal of a cancelled request's Telegram message, tracked separately
+  // from the financial status so a Telegram failure can never change money.
+  `ALTER TABLE demo_cashouts ADD COLUMN telegram_delete_status TEXT NOT NULL DEFAULT 'none'
+     CHECK (telegram_delete_status IN ('none', 'pending', 'deleted', 'already_absent', 'failed'));
+   ALTER TABLE demo_cashouts ADD COLUMN telegram_delete_attempts INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE demo_cashouts ADD COLUMN telegram_delete_next_at INTEGER;
+   ALTER TABLE demo_cashouts ADD COLUMN telegram_deleted_at TEXT;
+   ALTER TABLE demo_cashouts ADD COLUMN telegram_delete_error TEXT;`,
 ];
 
 function migrate(db, migrations) {

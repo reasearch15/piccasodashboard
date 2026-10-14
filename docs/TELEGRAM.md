@@ -93,7 +93,7 @@ After cancellation it shows `Status: CANCELLED` plus `Cancelled by: <admin>`, wi
 2. **Real samples:** owner provides redacted real Chime/Venmo messages; the parser is updated and tested against them.
 3. **Private test bot and test groups:** a new bot token plus four private test groups with only the owner. Use `polling` mode locally with `PICASSO_TELEGRAM_ALLOW_LIVE=true` and synthetic messages, and verify every flow by hand.
 4. **Production ledger:** add a separate non-demo ledger database and mode so that real payments never land in demo data.
-5. **VPS staging** (`payment.altast.work`): HTTPS, `webhook` mode, `setWebhook` with `secret_token` done manually, still pointed at the test groups.
+5. **VPS staging** (`payment.atlast.work`): HTTPS, `webhook` mode, `setWebhook` with `secret_token` done manually, still pointed at the test groups.
 6. **Go-live:** point the chat IDs at the real groups, start with a small completer allowlist, and monitor `telegram_events`.
 
 ## Admin Attention (adjustments and unusual notifications)
@@ -144,3 +144,22 @@ The Bot API cannot read Larry's BOT. Proposal:
 * For each message it POSTs `{chatId, messageId, date, text, senderId}` to `http://127.0.0.1:3000/api/ingest/telegram-message` with `X-Picasso-Ingest-Secret`. It makes no decisions itself: parsing and dedupe stay in Picasso.
 * It is read-only: it never sends, edits or deletes messages, and never joins or leaves groups.
 * Approval is needed for: adding Python with `telethon`, the account to use, and the owner completing the phone-code login.
+
+## StaffHelp bot: completion, admin cancellation, shared groups
+
+* **Shared groups.** Each method's incoming and cash-out chat may be the same chat (`PICASSO_TELEGRAM_ALLOW_SHARED_GROUPS=true`). Every message is classified explicitly, in this order:
+  1. Cash-out request text → `ignored_cashout_request`. This covers Picasso's own `PICASSO CASH OUT` post and staff-typed `!! Cashout Request !!` / `Tag name :` / `Amoun :`. It never becomes a payment or an attention event.
+  2. Our own bot posts → `ignored_own_message`.
+  3. Payment → pending payment.
+  4. Adjustment or other money-like text → Admin Attention.
+  5. Anything else → no record.
+* **Completed.** Only numeric Telegram user IDs listed in `PICASSO_TELEGRAM_COMPLETER_IDS` can complete, whether staff or admin. List the admin's Telegram ID there too if they should be able to complete.
+  * The request must still be pending, and the press must come from the exact bot message mapped server-side.
+  * A completion is recorded once (pending → done) and counts the requested amount.
+  * The message is then edited to COMPLETED with no button.
+* **Cancel (admin only).** Staff get 403 from the server. Pending → cancelled is atomic and can't overlap with completion. The action is recorded in the row and audit log, and the message is queued for **deletion** with `deleteMessage`. Removal status shows on the dashboard:
+  * **Removed:** shown only when Telegram confirms the delete, or answers "message to delete not found".
+  * **Temporary failure** (5xx, network, 429): retried with backoff.
+  * **Permanent refusal** (e.g. a message older than Telegram lets bots delete): status becomes **failed**. The message is edited to CANCELLED with no button, so nobody pays it, and an admin can press Retry Removal.
+  * Money is never touched by any Telegram step.
+* **Bot permissions.** The bot needs *delete messages* only if it must delete messages other than its own. It always deletes **its own** request message, which is allowed without admin rights within Telegram's time limit. Making the bot an admin with "Delete messages" lifts that limit in groups.

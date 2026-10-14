@@ -263,7 +263,7 @@ describe('Telegram bridge (mocked Bot API)', () => {
     assert.equal((await cashout(o.id)).completedBy, 'Alice Ops');
   });
 
-  it('12. cancelled requests cannot be completed; Telegram message shows CANCELLED', async () => {
+  it('12. cancelled requests cannot be completed; their Telegram message is deleted', async () => {
     const o = await newCashout('Chime', '18.00');
     assert.equal((await admin.post(`/api/cashouts/${o.id}/cancel`)).status, 204);
     await srv.telegram.handleUpdate(cbUpdate(o, COMPLETER));
@@ -271,9 +271,10 @@ describe('Telegram bridge (mocked Bot API)', () => {
     assert.deepEqual([after.status, after.cancelledBy], ['cancelled', 'CharsiNew']);
     assert.equal(events().at(-1).outcome, 'rejected_cancelled');
     await srv.telegram.processOutbox();
-    const edit = tg.callsOf('editMessageText').filter(c => c.params.message_id === o.telegramMessageId).at(-1);
-    assert.match(edit.params.text, /Status: CANCELLED\nCancelled by: CharsiNew$/);
-    assert.deepEqual(edit.params.reply_markup, { inline_keyboard: [] });
+    const del = tg.callsOf('deleteMessage').filter(c => c.params.message_id === o.telegramMessageId);
+    assert.equal(del.length, 1);
+    assert.equal(String(del[0].params.chat_id), CHATS.chimeOut);
+    assert.equal((await cashout(o.id)).telegramRemoval, 'removed');
   });
 
   it('12b. a request cancelled before delivery is never sent', async () => {
@@ -483,7 +484,7 @@ describe('18. Existing demo ledger and history survive the v2 migration', () => 
       const ledger = new DemoLedger(migrated);
       const after = ledger.state();
       // Old fields identical; only new Telegram fields (null/defaults) appear.
-      const strip = st => JSON.stringify({ ...st, cashouts: st.cashouts.map(({ requestNo, deliveryStatus, deliveryAttempts, messageSyncAttempts, telegramChatId, telegramMessageId, callbackToken, ...rest }) => rest) });
+      const strip = st => JSON.stringify({ ...st, cashouts: st.cashouts.map(({ requestNo, deliveryStatus, deliveryAttempts, messageSyncAttempts, telegramChatId, telegramMessageId, callbackToken, telegramDeleteStatus, telegramDeleteAttempts, ...rest }) => rest) });
       assert.equal(strip(after), strip(JSON.parse(snapshot)));
       assert.ok(after.cashouts.every(o => o.deliveryStatus === 'not_required' && o.telegramMessageId === null));
       assert.equal(after.settlements.at(-1).incoming.find(x => x.id === 'p1').acceptedBy, 'Riley');

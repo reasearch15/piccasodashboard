@@ -1,4 +1,4 @@
-# Deploying Picasso Dashboard to payment.altast.work
+# Deploying Picasso Dashboard to payment.atlast.work
 
 **Not deployed yet.** Follow these steps only after the owner approves. Nothing here touches TeleLedger, Atlas, AppBeg or any other service.
 
@@ -8,7 +8,7 @@
 node --version                      # needs >= 24.7 (built-in sqlite + argon2)
 sudo ss -ltnp                       # pick a FREE localhost port for Picasso
 ls /etc/nginx/sites-enabled/        # existing sites; do not edit them
-sudo nginx -T | grep server_name    # confirm nothing already serves payment.altast.work
+sudo nginx -T | grep server_name    # confirm nothing already serves payment.atlast.work
 systemctl list-units --type=service | grep -Ei 'teleledger|atlas|appbeg'
 df -h /opt
 ```
@@ -53,12 +53,12 @@ sudo cp deploy/picasso-dashboard.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now picasso-dashboard
 curl -s http://127.0.0.1:<PORT>/healthz          # {"ok":true}
 
-sudo certbot certonly --nginx -d payment.altast.work
-sudo cp deploy/nginx-payment.altast.work.conf /etc/nginx/sites-available/payment.altast.work
-sudo sed -i 's/127.0.0.1:PORT/127.0.0.1:<PORT>/' /etc/nginx/sites-available/payment.altast.work
-sudo ln -s /etc/nginx/sites-available/payment.altast.work /etc/nginx/sites-enabled/
+sudo certbot certonly --nginx -d payment.atlast.work
+sudo cp deploy/nginx-payment.atlast.work.conf /etc/nginx/sites-available/payment.atlast.work
+sudo sed -i 's/127.0.0.1:PORT/127.0.0.1:<PORT>/' /etc/nginx/sites-available/payment.atlast.work
+sudo ln -s /etc/nginx/sites-available/payment.atlast.work /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx      # reload, never restart, so other sites are not interrupted
-curl -s https://payment.altast.work/healthz
+curl -s https://payment.atlast.work/healthz
 ```
 
 ## 4. Safe update (redeploy)

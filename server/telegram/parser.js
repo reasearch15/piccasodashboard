@@ -120,14 +120,33 @@ function parseAdjustment(text) {
   };
 }
 
+// ---- Cash-out request messages (shared groups) ------------------------------
+// Chime and Venmo each use ONE group for incoming payments and cash-out
+// requests, so cash-out messages must be recognised explicitly and never read
+// as payments or "suspicious" notifications:
+//   - Picasso's own bot message, first line "PICASSO CASH OUT"
+//   - the staff-typed request, first line "!! Cashout Request !!" with
+//     "Tag name :" / "Amoun :" (that spelling, or "Amount :")
+const CASHOUT_HEADER = /^(?:PICASSO CASH OUT|!!\s*Cash\s*-?\s*out\s+Request\s*!!)$/i;
+const CASHOUT_FIELD = /^(?:Tag\s*name|Amoun|Amount)\s*:/i;
+function isCashoutRequest(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  if (CASHOUT_HEADER.test(lines[0])) return true;
+  return lines.filter(l => CASHOUT_FIELD.test(l)).length >= 2 && lines.some(l => /^Tag\s*name\s*:/i.test(l));
+}
+
 // Decides what one Telegram message becomes. Every message yields exactly one
 // outcome, so a message can never be both a payment and an attention event.
+//   cashout_request -> no record (logged; cash-outs come only from the dashboard)
 //   payment   -> Payment Panel (pending)
 //   attention -> Admin Attention (pending review; amount only if recognised)
 //   none      -> no financial record (logged only)
 // The parser is chosen by the group's configured method, never by the text.
 function classifyMessage(text, method = 'Venmo', { venmoParser = 'provisional' } = {}) {
   if (typeof text !== 'string' || !text.trim()) return { kind: 'none', reason: 'no_text' };
+  // Checked first: a cash-out request is never a payment or an attention item.
+  if (isCashoutRequest(text)) return { kind: 'cashout_request', reason: 'cashout_request' };
   const payment = method === 'Chime' ? parseChimeMessage(text) : parsePaymentMessage(text);
   // Unverified Venmo: even a message that looks like a payment is only held
   // for review, never turned into a payment, and no amount is asserted.
@@ -144,4 +163,4 @@ function classifyMessage(text, method = 'Venmo', { venmoParser = 'provisional' }
   return { kind: 'none', reason: payment.reason };
 }
 
-module.exports = { parsePaymentMessage, parseChimeMessage, classifyMessage, PARSER_VERSION, CHIME_PARSER_VERSION };
+module.exports = { parsePaymentMessage, parseChimeMessage, classifyMessage, isCashoutRequest, PARSER_VERSION, CHIME_PARSER_VERSION };

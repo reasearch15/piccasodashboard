@@ -25,6 +25,7 @@ function previewBackfill(ledger, cfg, messages) {
     const c = classifyMessage(m.text, method, { venmoParser: cfg.venmoParser });
     if (c.kind === 'payment') { counts.payment++; byMethod[method].payment++; byMethod[method].amountCents += c.amountCents; }
     else if (c.kind === 'attention') { counts.attention++; byMethod[method].attention++; }
+    else if (c.kind === 'cashout_request') { counts.cashout_request = (counts.cashout_request || 0) + 1; }
     else { counts.no_record++; rejectedReasons[c.reason] = (rejectedReasons[c.reason] || 0) + 1; }
   }
   return { counts, byMethod, rejectedReasons, boundary: cfg.paymentStartMs == null ? null : new Date(cfg.paymentStartMs).toISOString() };

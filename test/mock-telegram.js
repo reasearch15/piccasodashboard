@@ -40,6 +40,14 @@ async function startMockTelegram(token) {
         case 'sendMessage': return reply(200, { ok: true, result: { message_id: ++state.nextMessageId, chat: { id: Number(params.chat_id) }, from: { id: state.botId, is_bot: true }, date: Math.floor(Date.now() / 1000), text: params.text } });
         case 'editMessageText': return reply(200, { ok: true, result: { message_id: params.message_id } });
         case 'answerCallbackQuery': return reply(200, { ok: true, result: true });
+        case 'deleteMessage': {
+          // Real Telegram answers "message to delete not found" for a second delete.
+          state.deleted ??= new Set();
+          const key = `${params.chat_id}:${params.message_id}`;
+          if (state.deleted.has(key)) return reply(400, { ok: false, error_code: 400, description: 'Bad Request: message to delete not found' });
+          state.deleted.add(key);
+          return reply(200, { ok: true, result: true });
+        }
         default: return reply(404, { ok: false, error_code: 404, description: 'Not Found' });
       }
     });

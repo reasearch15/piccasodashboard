@@ -118,6 +118,11 @@ class TelegramBot {
       if (r.outcome === 'created') this.events.publish(['attention']);
       return r;
     }
+    if (parsed.kind === 'cashout_request') {
+      // Shared group: cash-out requests are created only from the dashboard and
+      // are never turned into payments or attention events from chat text.
+      return this.ledger.logTelegramEvent({ ...base, outcome: 'ignored_cashout_request', detail: `method=${method}` });
+    }
     if (parsed.kind !== 'payment') {
       // Reason and length only; ordinary chat text is not stored.
       return this.ledger.logTelegramEvent({ ...base, outcome: `rejected_${parsed.reason}`, detail: `method=${method} len=${String(msg.text ?? '').length}` });
@@ -163,7 +168,9 @@ class TelegramBot {
     if (!completed) {
       const current = this.ledger.getCashout(cashout.id);
       this.ledger.logTelegramEvent({ ...base, outcome: current.status === 'done' ? 'duplicate_completion' : 'rejected_cancelled', refId: cashout.id });
-      this.ledger.db.prepare('UPDATE demo_cashouts SET message_sync_needed = 1, message_sync_next_at = ? WHERE id = ? AND telegram_message_id IS NOT NULL').run(Date.now(), cashout.id);
+      // Completed: make sure the message is re-rendered. Cancelled: removal was
+      // already queued by the cancellation itself.
+      if (current.status === 'done') this.ledger.db.prepare('UPDATE demo_cashouts SET message_sync_needed = 1, message_sync_next_at = ? WHERE id = ? AND telegram_message_id IS NOT NULL').run(Date.now(), cashout.id);
       this.kick();
       return answer(current.status === 'done' ? 'Already completed.' : 'This request was cancelled.');
     }
@@ -187,7 +194,36 @@ class TelegramBot {
 
   async runOutbox() {
     for (const o of this.ledger.dueDeliveries()) await this.deliver(o);
+    for (const o of this.ledger.dueDeletions()) await this.deleteCancelled(o);
     for (const o of this.ledger.dueMessageSyncs()) await this.syncMessage(o);
+  }
+
+  // Removes a cancelled request's message from its group. Only a confirmed
+  // delete, or Telegram reporting the message is already gone, counts as
+  // removed. Temporary failures retry with backoff. A permanent refusal (for
+  // example, older than Telegram allows bots to delete) is marked failed for
+  // the admin to see and retry, and the message is edited to CANCELLED with no
+  // button so nobody acts on it. Money is never touched here.
+  async deleteCancelled(o) {
+    const where = { chatId: o.telegramChatId, messageId: o.telegramMessageId, refId: o.id };
+    try {
+      await this.api.call('deleteMessage', { chat_id: o.telegramChatId, message_id: o.telegramMessageId });
+      this.ledger.markTelegramDeleted(o.id, 'deleted');
+      this.ledger.logTelegramEvent({ kind: 'message_delete', outcome: 'cashout_message_deleted', ...where });
+    } catch (e) {
+      if (/message to delete not found/i.test(e.description || '')) {
+        this.ledger.markTelegramDeleted(o.id, 'already_absent');
+        this.ledger.logTelegramEvent({ kind: 'message_delete', outcome: 'cashout_message_already_absent', ...where });
+      } else {
+        const permanent = (e.status === 400 || e.status === 403) && !e.retryAfter;
+        const attempts = o.telegramDeleteAttempts + 1;
+        const final = permanent || attempts >= this.cfg.maxDeliveryAttempts;
+        this.ledger.markTelegramDeleteFailed(o.id, e.message, Date.now() + (e.retryAfter ? e.retryAfter * 1000 : backoff(attempts)), final);
+        this.ledger.logTelegramEvent({ kind: 'message_delete', outcome: final ? 'cashout_message_delete_failed' : 'cashout_message_delete_retry', ...where, detail: e.message.slice(0, 200) });
+        if (final) this.ledger.db.prepare('UPDATE demo_cashouts SET message_sync_needed = 1, message_sync_attempts = 0, message_sync_next_at = ? WHERE id = ?').run(Date.now(), o.id);
+      }
+    }
+    this.events.publish(['cashouts']);
   }
 
   async deliver(o) {

@@ -155,7 +155,14 @@ function createApp(config) {
       ledger.completeCashout(params.id, user);
       return { status: 204 };
     } },
-    { method: 'POST', path: '/api/cashouts/:id/cancel', roles: ADMIN_ONLY, publish: ['cashouts'], handler: ({ params, user }) => { ledger.cancelCashout(params.id, user); telegram?.kick(); return { status: 204 }; } },
+    { method: 'POST', path: '/api/cashouts/:id/cancel', roles: ADMIN_ONLY, publish: ['cashouts'], handler: ({ params, user }) => { ledger.cancelCashout(params.id, user); accounts.audit(user, 'cashout_cancelled', { id: params.id, username: null }); telegram?.kick(); return { status: 204 }; } },
+    { method: 'POST', path: '/api/cashouts/:id/retry-telegram-removal', roles: ADMIN_ONLY, publish: ['cashouts'], handler: ({ params, user }) => {
+      if (!tg.enabled) throw new HttpError(409, 'Telegram is not enabled.');
+      ledger.retryTelegramDelete(params.id);
+      accounts.audit(user, 'cashout_telegram_removal_retry', { id: params.id, username: null });
+      telegram.kick();
+      return { status: 204 };
+    } },
     { method: 'POST', path: '/api/cashouts/:id/retry-delivery', roles: ADMIN_ONLY, publish: ['cashouts'], handler: ({ params }) => {
       if (!tg.enabled) throw new HttpError(409, 'Telegram delivery is not enabled.');
       ledger.retryDelivery(params.id);
