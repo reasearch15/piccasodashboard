@@ -72,6 +72,79 @@ Implemented once, in `server/telegram/incoming.js`:
    * **Safe to repeat:** apply is idempotent and resumable (re-running skips everything already imported), and safe alongside the running dashboard and live listener.
    * **Effect on displayed totals: none.** Imported payments are **pending**; Accepted In and the running balances change only when staff or admins accept them.
 
+## Fixed Venmo sender-evidence export (messages 15185–15207)
+
+This is intentionally a separate command from `export-history`. It can only
+request Telegram message IDs **15185 through 15207** from Venmo chat
+**-5306739731**, and it accepts only sender **8614082158**. There is no command
+line option to broaden the chat, sender, or range.
+
+Telethon's default session is a SQLite database containing the authorization
+key, cached entities, and update state. Opening the listener's database from a
+second process can contend on that database and can persist session state even
+when the application operation is read-only. The evidence command therefore
+requires a separately authenticated `PICASSO_EVIDENCE_SESSION`; it rejects the
+live path, resolved-path aliases, hard links, and session-file symlinks. It also
+sets `receive_updates=False`. Do not copy the live `.session` file.
+
+After an owner approves production execution, create the private directory and
+log in the dedicated session once (these commands are documentation only; they
+are not run by tests or deployment):
+
+```bash
+sudo install -d -o picasso-tg -g picasso-tg -m 0700 /opt/picasso-telegram-evidence
+sudo -u picasso-tg bash -c 'set -a; . /etc/picasso-telegram-listener/listener.env; set +a; \
+  export PICASSO_EVIDENCE_SESSION=/opt/picasso-telegram-evidence/venmo-evidence; \
+  PYTHONPATH=/opt/picasso-dashboard/app/listener /opt/picasso-telegram-listener/venv/bin/python \
+  -m picasso_listener evidence-login'
+```
+
+Then produce the fixed export (choose a new filename for every attempt):
+
+```bash
+sudo -u picasso-tg bash -c 'set -a; . /etc/picasso-telegram-listener/listener.env; set +a; \
+  export PICASSO_EVIDENCE_SESSION=/opt/picasso-telegram-evidence/venmo-evidence; \
+  PYTHONPATH=/opt/picasso-dashboard/app/listener /opt/picasso-telegram-listener/venv/bin/python \
+  -m picasso_listener export-venmo-evidence \
+  --out /opt/picasso-telegram-evidence/venmo-15185-15207.jsonl'
+sudo -u picasso-tg sh -c 'cd /opt/picasso-telegram-evidence && \
+  sha256sum -c venmo-15185-15207.jsonl.sha256'
+```
+
+The exporter makes one ID-addressed Telegram read, validates all 23 messages
+before writing, and rejects missing, extra, duplicate, wrong-chat, wrong-sender,
+empty-text, or edited results. It writes the JSONL and checksum with mode 0600,
+using exclusive creation; it never overwrites. It has no cursor or ingestion
+client and its read-only client facade exposes no send, edit, delete, or forward
+operation.
+
+Run the reconciliation dry run against that exact, checksum-verified file:
+
+```bash
+sudo -u picasso sh -c 'cd /opt/picasso-dashboard/app && \
+  node --env-file=/etc/picasso-dashboard/picasso.env server/reconcile-attention.js \
+  --export /opt/picasso-telegram-evidence/venmo-15185-15207.jsonl \
+  --chat -5306739731 --ids 15185-15207 --parser venmo-v1'
+```
+
+Record the SHA-256 beside the reviewed reconciliation plan and approval token,
+and verify it again before any separately approved apply. The reconciliation
+token is derived from the exact export contents and decision configuration, so
+changing either invalidates the token.
+
+### Evidence limitation and custody
+
+A JSONL `senderId` is not a signature and does not authenticate itself. Its
+trust comes from this controlled acquisition: a dedicated Telethon authorization
+reads the specified IDs directly from the configured Telegram chat; the exporter
+checks Telegram's chat, sender, original timestamp, text, and edit metadata; the
+files are owner-only; and the SHA-256 binds the reviewed file to the dry run.
+The operator must protect the dedicated session like a full Telegram login,
+retain the JSONL and checksum together, record who performed the export and
+when, and avoid copying either through an untrusted channel. Telegram account
+compromise, host compromise before hashing, or later loss of the acquisition
+log remain outside what the JSONL and checksum can prove.
+
 ## Security
 
 * **Separate identity:**

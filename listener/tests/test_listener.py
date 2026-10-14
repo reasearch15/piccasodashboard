@@ -8,12 +8,15 @@ import shutil
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from picasso_listener.client import ReadOnlyClient
 from picasso_listener.config import ConfigError, load_config
 from picasso_listener.core import Listener, message_payload
+from picasso_listener import evidence
+from picasso_listener.evidence import EVIDENCE_IDS, LARRY_BOT_ID, VENMO_CHAT_ID, evidence_settings, export_venmo_evidence
 from picasso_listener.history import export_history
 from picasso_listener.ingest import IngestClient, IngestRejected, IngestUnavailable
 from picasso_listener.state import CursorState
@@ -59,9 +62,12 @@ class FakeClient:
         self.flood_on_iter = flood_on_iter
         self.calls = []
 
-    async def get_messages(self, chat, limit=1, offset_date=None):
-        self.calls.append(("get_messages", chat, offset_date))
+    async def get_messages(self, chat, limit=1, offset_date=None, ids=None):
+        self.calls.append(("get_messages", chat, offset_date, ids))
         ms = self.messages.get(chat, [])
+        if ids is not None:
+            indexed = {m.id: m for m in ms}
+            return [indexed.get(i) for i in ids]
         if offset_date is not None:
             ms = [m for m in ms if m.date < offset_date]
         return ms[-limit:][::-1]
@@ -361,6 +367,102 @@ class ExportTests(Base):
             self.assertEqual(os.stat(out).st_mode & 0o777, 0o600)
         with self.assertRaises(FileExistsError):
             await export_history(ReadOnlyClient(client), self.cfg, out, sleep=self.fake_sleep)
+
+
+class EvidenceExportTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        values = env(
+            self.tmp,
+            PICASSO_TELEGRAM_VENMO_INCOMING_CHAT_ID=str(VENMO_CHAT_ID),
+            PICASSO_PAYMENT_SOURCE_SENDER_IDS=str(LARRY_BOT_ID),
+            PICASSO_EVIDENCE_SESSION=os.path.join(self.tmp, "evidence", "venmo"),
+        )
+        self.values = values
+        self.cfg = load_config(values)
+        self.messages = [Msg(VENMO_CHAT_ID, i, NOW + timedelta(seconds=i), f"payment {i}", LARRY_BOT_ID) for i in EVIDENCE_IDS]
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def out(self):
+        return os.path.join(self.tmp, "venmo-evidence.jsonl")
+
+    async def test_valid_fixed_evidence_and_checksum(self):
+        out = self.out()
+        result = await export_venmo_evidence(ReadOnlyClient(FakeClient({VENMO_CHAT_ID: self.messages})), out, now=NOW.timestamp)
+        lines = [json.loads(line) for line in Path(out).read_text(encoding="utf-8").splitlines()]
+        rows = [line for line in lines if "_meta" not in line]
+        self.assertEqual([r["messageId"] for r in rows], list(EVIDENCE_IDS))
+        self.assertTrue(all(r["chatId"] == VENMO_CHAT_ID and r["senderId"] == LARRY_BOT_ID and not r["edited"] for r in rows))
+        self.assertEqual(lines[-1]["_meta"]["source"], "direct-telegram-api")
+        self.assertIn(result["sha256"], Path(out + ".sha256").read_text(encoding="ascii"))
+        if os.name == "posix":
+            self.assertEqual(os.stat(out).st_mode & 0o777, 0o600)
+            self.assertEqual(os.stat(out + ".sha256").st_mode & 0o777, 0o600)
+
+    async def test_missing_message_is_rejected_without_output(self):
+        with self.assertRaisesRegex(ValueError, "15190"):
+            await export_venmo_evidence(ReadOnlyClient(FakeClient({VENMO_CHAT_ID: [m for m in self.messages if m.id != 15190]})), self.out())
+        self.assertFalse(os.path.exists(self.out()))
+
+    async def test_wrong_sender_group_and_edit_are_rejected(self):
+        cases = [
+            (Msg(VENMO_CHAT_ID, 15190, NOW, "x", 123), "unexpected sender"),
+            (Msg(-999, 15190, NOW, "x", LARRY_BOT_ID), "unexpected chat"),
+            (Msg(VENMO_CHAT_ID, 15190, NOW, "x", LARRY_BOT_ID, edit_date=NOW), "was edited"),
+        ]
+        for replacement, reason in cases:
+            messages = [replacement if m.id == 15190 else m for m in self.messages]
+            client = FakeClient({VENMO_CHAT_ID: messages})
+            # Preserve a wrong-chat response under the requested chat in the fake.
+            client.messages[VENMO_CHAT_ID] = sorted(messages, key=lambda m: m.id)
+            with self.assertRaisesRegex(ValueError, reason):
+                await export_venmo_evidence(ReadOnlyClient(client), self.out())
+
+    async def test_duplicate_response_is_rejected(self):
+        class DuplicateClient(FakeClient):
+            async def get_messages(self, chat, **kwargs):
+                result = await super().get_messages(chat, **kwargs)
+                return result + [result[0]]
+        with self.assertRaisesRegex(ValueError, "duplicate message"):
+            await export_venmo_evidence(ReadOnlyClient(DuplicateClient({VENMO_CHAT_ID: self.messages})), self.out())
+
+    def test_session_must_be_distinct_from_live_listener(self):
+        self.assertEqual(evidence_settings(self.cfg, self.values), self.values["PICASSO_EVIDENCE_SESSION"])
+        same = dict(self.values, PICASSO_EVIDENCE_SESSION=self.cfg.session_path)
+        with self.assertRaisesRegex(ConfigError, "must not be the live"):
+            evidence_settings(self.cfg, same)
+
+        os.makedirs(os.path.dirname(self.cfg.session_path), exist_ok=True)
+        live = self.cfg.session_path + ".session"
+        alias = self.values["PICASSO_EVIDENCE_SESSION"] + ".session"
+        os.makedirs(os.path.dirname(alias), exist_ok=True)
+        Path(live).write_bytes(b"session")
+        os.link(live, alias)
+        with self.assertRaisesRegex(ConfigError, "aliases the live"):
+            evidence_settings(self.cfg, self.values)
+
+    async def test_export_failure_removes_partial_files_and_never_overwrites(self):
+        out = self.out()
+        original = evidence._exclusive_write
+        calls = 0
+        def fail_second(path, data):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("disk failure")
+            return original(path, data)
+        with mock.patch.object(evidence, "_exclusive_write", side_effect=fail_second):
+            with self.assertRaisesRegex(OSError, "disk failure"):
+                await export_venmo_evidence(ReadOnlyClient(FakeClient({VENMO_CHAT_ID: self.messages})), out)
+        self.assertFalse(os.path.exists(out))
+        self.assertFalse(os.path.exists(out + ".sha256"))
+
+        Path(out).write_text("keep", encoding="utf-8")
+        with self.assertRaises(FileExistsError):
+            await export_venmo_evidence(ReadOnlyClient(FakeClient({VENMO_CHAT_ID: self.messages})), out)
+        self.assertEqual(Path(out).read_text(encoding="utf-8"), "keep")
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):

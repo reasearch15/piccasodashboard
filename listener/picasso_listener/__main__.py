@@ -5,6 +5,9 @@
   python -m picasso_listener run              the service (systemd)
   python -m picasso_listener export-history --out FILE
                                               owner-approved history export for the preview
+  python -m picasso_listener evidence-login   login a dedicated evidence session
+  python -m picasso_listener export-venmo-evidence --out FILE
+                                              fixed IDs 15185-15207 only
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ import sys
 from .client import ReadOnlyClient
 from .config import ConfigError, load_config
 from .core import Listener
+from .evidence import EVIDENCE_RANGE, evidence_settings, export_venmo_evidence
 from .history import export_history
 from .ingest import IngestClient
 from .state import CursorState
@@ -36,12 +40,12 @@ def secure_session_file(path: str) -> None:
             os.chmod(candidate, 0o600)
 
 
-def telethon_client(cfg):
+def telethon_client(cfg, *, session_path=None, receive_updates=True):
     from telethon import TelegramClient  # imported lazily so tests need no network
     return TelegramClient(
-        cfg.session_path, cfg.api_id, cfg.api_hash,
+        session_path or cfg.session_path, cfg.api_id, cfg.api_hash,
         auto_reconnect=True, connection_retries=10, retry_delay=5,
-        flood_sleep_threshold=60, receive_updates=True,
+        flood_sleep_threshold=60, receive_updates=receive_updates,
     )
 
 
@@ -100,14 +104,47 @@ async def export(cfg, out) -> int:
     return 0
 
 
+async def evidence_login(cfg) -> int:
+    path = evidence_settings(cfg)
+    secure_session_file(path)
+    raw = telethon_client(cfg, session_path=path, receive_updates=False)
+    await raw.start()  # interactive: creates a distinct Telegram authorization
+    me = await raw.get_me()
+    await raw.disconnect()
+    secure_session_file(path)
+    print(f"Dedicated evidence session logged in as user id {me.id}; stored at {path} (mode 600).")
+    return 0
+
+
+async def export_evidence(cfg, out) -> int:
+    path = evidence_settings(cfg)
+    secure_session_file(path)
+    client = ReadOnlyClient(telethon_client(cfg, session_path=path, receive_updates=False))
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            log.error("Dedicated evidence session is not logged in. Run `python -m picasso_listener evidence-login` first.")
+            return 3
+        result = await export_venmo_evidence(client, out)
+    finally:
+        await client.disconnect()
+    print(f"Exported {result['messages']} Venmo messages ({EVIDENCE_RANGE}) to {out}.")
+    print(f"SHA-256: {result['sha256']} (also written to {result['checksumPath']})")
+    print("Nothing was sent to Picasso and no listener cursor was read or changed.")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="picasso_listener")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("check")
     sub.add_parser("login")
     sub.add_parser("run")
+    sub.add_parser("evidence-login")
     exp = sub.add_parser("export-history")
     exp.add_argument("--out", required=True)
+    evidence = sub.add_parser("export-venmo-evidence")
+    evidence.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("telethon").setLevel(logging.WARNING)
@@ -121,8 +158,12 @@ def main(argv=None) -> int:
         return 0
     if args.command == "login":
         return asyncio.run(login(cfg))
+    if args.command == "evidence-login":
+        return asyncio.run(evidence_login(cfg))
     if args.command == "export-history":
         return asyncio.run(export(cfg, args.out))
+    if args.command == "export-venmo-evidence":
+        return asyncio.run(export_evidence(cfg, args.out))
     return asyncio.run(run(cfg))
 
 
