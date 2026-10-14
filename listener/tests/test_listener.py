@@ -16,7 +16,10 @@ from picasso_listener.client import ReadOnlyClient
 from picasso_listener.config import ConfigError, load_config
 from picasso_listener.core import Listener, message_payload
 from picasso_listener import evidence
-from picasso_listener.evidence import EVIDENCE_IDS, LARRY_BOT_ID, VENMO_CHAT_ID, evidence_settings, export_venmo_evidence
+from picasso_listener.evidence import (
+    EVIDENCE_IDS, LARRY_BOT_ID, REDUCED_EVIDENCE_IDS, REDUCED_EVIDENCE_RANGE,
+    VENMO_CHAT_ID, evidence_ids, evidence_settings, export_venmo_evidence,
+)
 from picasso_listener.history import export_history
 from picasso_listener.ingest import IngestClient, IngestRejected, IngestUnavailable
 from picasso_listener.state import CursorState
@@ -390,20 +393,54 @@ class EvidenceExportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_valid_fixed_evidence_and_checksum(self):
         out = self.out()
-        result = await export_venmo_evidence(ReadOnlyClient(FakeClient({VENMO_CHAT_ID: self.messages})), out, now=NOW.timestamp)
+        client = FakeClient({VENMO_CHAT_ID: self.messages})
+        result = await export_venmo_evidence(ReadOnlyClient(client), out, now=NOW.timestamp)
         lines = [json.loads(line) for line in Path(out).read_text(encoding="utf-8").splitlines()]
         rows = [line for line in lines if "_meta" not in line]
         self.assertEqual([r["messageId"] for r in rows], list(EVIDENCE_IDS))
         self.assertTrue(all(r["chatId"] == VENMO_CHAT_ID and r["senderId"] == LARRY_BOT_ID and not r["edited"] for r in rows))
         self.assertEqual(lines[-1]["_meta"]["source"], "direct-telegram-api")
+        self.assertEqual(lines[-1]["_meta"]["messageIds"], "15185-15207")
+        self.assertEqual(lines[-1]["_meta"]["messageCount"], 23)
+        self.assertEqual(client.calls[0][3], list(EVIDENCE_IDS))
         self.assertIn(result["sha256"], Path(out + ".sha256").read_text(encoding="ascii"))
         if os.name == "posix":
             self.assertEqual(os.stat(out).st_mode & 0o777, 0o600)
             self.assertEqual(os.stat(out + ".sha256").st_mode & 0o777, 0o600)
 
+    async def test_valid_approved_reduced_range(self):
+        out = self.out()
+        client = FakeClient({VENMO_CHAT_ID: self.messages})
+        result = await export_venmo_evidence(
+            ReadOnlyClient(client), out, range_spec=REDUCED_EVIDENCE_RANGE, now=NOW.timestamp,
+        )
+        lines = [json.loads(line) for line in Path(out).read_text(encoding="utf-8").splitlines()]
+        rows = [line for line in lines if "_meta" not in line]
+        self.assertEqual([r["messageId"] for r in rows], list(REDUCED_EVIDENCE_IDS))
+        self.assertEqual(client.calls[0][3], list(REDUCED_EVIDENCE_IDS))
+        self.assertEqual(lines[-1]["_meta"]["messageIds"], REDUCED_EVIDENCE_RANGE)
+        self.assertEqual(lines[-1]["_meta"]["messageCount"], 21)
+        self.assertEqual(result["messages"], 21)
+
+    def test_only_two_ranges_are_permitted(self):
+        self.assertEqual(evidence_ids("15185-15207"), EVIDENCE_IDS)
+        self.assertEqual(evidence_ids(REDUCED_EVIDENCE_RANGE), REDUCED_EVIDENCE_IDS)
+        for rejected in ("15186-15207", "15188-15207", "15187-15206", "1-999999", ""):
+            with self.assertRaisesRegex(ValueError, "must be one of"):
+                evidence_ids(rejected)
+
     async def test_missing_message_is_rejected_without_output(self):
         with self.assertRaisesRegex(ValueError, "15190"):
             await export_venmo_evidence(ReadOnlyClient(FakeClient({VENMO_CHAT_ID: [m for m in self.messages if m.id != 15190]})), self.out())
+        self.assertFalse(os.path.exists(self.out()))
+
+    async def test_missing_message_in_reduced_range_is_rejected_without_output(self):
+        messages = [m for m in self.messages if m.id != 15190]
+        with self.assertRaisesRegex(ValueError, "15190"):
+            await export_venmo_evidence(
+                ReadOnlyClient(FakeClient({VENMO_CHAT_ID: messages})),
+                self.out(), range_spec=REDUCED_EVIDENCE_RANGE,
+            )
         self.assertFalse(os.path.exists(self.out()))
 
     async def test_wrong_sender_group_and_edit_are_rejected(self):

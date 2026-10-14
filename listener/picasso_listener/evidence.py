@@ -20,6 +20,20 @@ VENMO_CHAT_ID = -5306739731
 LARRY_BOT_ID = 8614082158
 EVIDENCE_IDS = tuple(range(15185, 15208))
 EVIDENCE_RANGE = "15185-15207"
+REDUCED_EVIDENCE_IDS = tuple(range(15187, 15208))
+REDUCED_EVIDENCE_RANGE = "15187-15207"
+APPROVED_EVIDENCE_RANGES = {
+    EVIDENCE_RANGE: EVIDENCE_IDS,
+    REDUCED_EVIDENCE_RANGE: REDUCED_EVIDENCE_IDS,
+}
+
+
+def evidence_ids(range_spec: str) -> tuple[int, ...]:
+    try:
+        return APPROVED_EVIDENCE_RANGES[range_spec]
+    except KeyError:
+        allowed = ", ".join(APPROVED_EVIDENCE_RANGES)
+        raise ValueError(f"Evidence range must be one of: {allowed}.") from None
 
 
 def _session_file(path: str) -> str:
@@ -67,21 +81,22 @@ def _exclusive_write(path: str, data: bytes) -> None:
         os.close(fd)
 
 
-async def export_venmo_evidence(client, out_path: str, *, now=time.time) -> dict:
-    """Fetch and export exactly EVIDENCE_IDS, or fail without an evidence file."""
+async def export_venmo_evidence(client, out_path: str, *, range_spec=EVIDENCE_RANGE, now=time.time) -> dict:
+    """Fetch one approved ID range, or fail without an evidence file."""
+    selected_ids = evidence_ids(range_spec)
     checksum_path = out_path + ".sha256"
     for path in (out_path, checksum_path):
         if os.path.lexists(path):
             raise FileExistsError(f"{path} already exists; choose a new file name")
 
-    returned = await client.get_messages(VENMO_CHAT_ID, ids=list(EVIDENCE_IDS))
+    returned = await client.get_messages(VENMO_CHAT_ID, ids=list(selected_ids))
     messages = list(returned) if returned is not None else []
     by_id = {}
     for msg in messages:
         if msg is None:
             continue
         message_id = int(msg.id)
-        if message_id not in EVIDENCE_IDS:
+        if message_id not in selected_ids:
             raise ValueError(f"Telegram returned unexpected message {message_id}.")
         if message_id in by_id:
             raise ValueError(f"Telegram returned duplicate message {message_id}.")
@@ -95,17 +110,17 @@ async def export_venmo_evidence(client, out_path: str, *, now=time.time) -> dict
             raise ValueError(f"Message {message_id} has no text.")
         by_id[message_id] = msg
 
-    missing = [message_id for message_id in EVIDENCE_IDS if message_id not in by_id]
+    missing = [message_id for message_id in selected_ids if message_id not in by_id]
     if missing:
         raise ValueError("Telegram did not return required message(s): " + ", ".join(map(str, missing)))
 
-    rows = [message_payload(by_id[message_id], edited=False) for message_id in EVIDENCE_IDS]
+    rows = [message_payload(by_id[message_id], edited=False) for message_id in selected_ids]
     meta = {
         "kind": "picasso-venmo-sender-evidence-v1",
         "source": "direct-telegram-api",
         "exportedAt": int(now()),
         "chatId": VENMO_CHAT_ID,
-        "messageIds": EVIDENCE_RANGE,
+        "messageIds": range_spec,
         "senderId": LARRY_BOT_ID,
         "messageCount": len(rows),
         "editedMessagesAccepted": False,

@@ -72,12 +72,12 @@ Implemented once, in `server/telegram/incoming.js`:
    * **Safe to repeat:** apply is idempotent and resumable (re-running skips everything already imported), and safe alongside the running dashboard and live listener.
    * **Effect on displayed totals: none.** Imported payments are **pending**; Accepted In and the running balances change only when staff or admins accept them.
 
-## Fixed Venmo sender-evidence export (messages 15185–15207)
+## Fixed Venmo sender-evidence export (messages 15185–15207 or 15187–15207)
 
-This is intentionally a separate command from `export-history`. It can only
-request Telegram message IDs **15185 through 15207** from Venmo chat
-**-5306739731**, and it accepts only sender **8614082158**. There is no command
-line option to broaden the chat, sender, or range.
+This is intentionally a separate command from `export-history`. It can request
+only the original approved range **15185 through 15207** or the approved reduced
+range **15187 through 15207** from Venmo chat **-5306739731**, and it accepts
+only sender **8614082158**. Any other `--ids` value is rejected.
 
 Telethon's default session is a SQLite database containing the authorization
 key, cached entities, and update state. Opening the listener's database from a
@@ -106,25 +106,26 @@ sudo -u picasso-tg bash -c 'set -a; . /etc/picasso-telegram-listener/listener.en
   export PICASSO_EVIDENCE_SESSION=/opt/picasso-telegram-evidence/venmo-evidence; \
   PYTHONPATH=/opt/picasso-dashboard/app/listener /opt/picasso-telegram-listener/venv/bin/python \
   -m picasso_listener export-venmo-evidence \
-  --out /opt/picasso-telegram-evidence/venmo-15185-15207.jsonl'
+  --ids 15187-15207 \
+  --out /opt/picasso-telegram-evidence/venmo-15187-15207.jsonl'
 sudo -u picasso-tg sh -c 'cd /opt/picasso-telegram-evidence && \
-  sha256sum -c venmo-15185-15207.jsonl.sha256'
+  sha256sum -c venmo-15187-15207.jsonl.sha256'
 ```
 
-The exporter makes one ID-addressed Telegram read, validates all 23 messages
-before writing, and rejects missing, extra, duplicate, wrong-chat, wrong-sender,
-empty-text, or edited results. It writes the JSONL and checksum with mode 0600,
-using exclusive creation; it never overwrites. It has no cursor or ingestion
-client and its read-only client facade exposes no send, edit, delete, or forward
-operation.
+The exporter makes one ID-addressed Telegram read and validates every selected
+message (23 in the original range or 21 in the reduced range) before writing.
+It rejects missing, extra, duplicate, wrong-chat, wrong-sender, empty-text, or
+edited results. It writes the JSONL and checksum with mode 0600, using exclusive
+creation; it never overwrites. It has no cursor or ingestion client and its
+read-only client facade exposes no send, edit, delete, or forward operation.
 
 Run the reconciliation dry run against that exact, checksum-verified file:
 
 ```bash
 sudo -u picasso sh -c 'cd /opt/picasso-dashboard/app && \
   node --env-file=/etc/picasso-dashboard/picasso.env server/reconcile-attention.js \
-  --export /opt/picasso-telegram-evidence/venmo-15185-15207.jsonl \
-  --chat -5306739731 --ids 15185-15207 --parser venmo-v1'
+  --export /opt/picasso-telegram-evidence/venmo-15187-15207.jsonl \
+  --chat -5306739731 --ids 15187-15207 --parser venmo-v1'
 ```
 
 Record the SHA-256 beside the reviewed reconciliation plan and approval token,

@@ -6,8 +6,8 @@
   python -m picasso_listener export-history --out FILE
                                               owner-approved history export for the preview
   python -m picasso_listener evidence-login   login a dedicated evidence session
-  python -m picasso_listener export-venmo-evidence --out FILE
-                                              fixed IDs 15185-15207 only
+  python -m picasso_listener export-venmo-evidence --ids RANGE --out FILE
+                                              approved Venmo evidence ranges only
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import sys
 from .client import ReadOnlyClient
 from .config import ConfigError, load_config
 from .core import Listener
-from .evidence import EVIDENCE_RANGE, evidence_settings, export_venmo_evidence
+from .evidence import APPROVED_EVIDENCE_RANGES, evidence_settings, export_venmo_evidence
 from .history import export_history
 from .ingest import IngestClient
 from .state import CursorState
@@ -116,7 +116,7 @@ async def evidence_login(cfg) -> int:
     return 0
 
 
-async def export_evidence(cfg, out) -> int:
+async def export_evidence(cfg, out, range_spec) -> int:
     path = evidence_settings(cfg)
     secure_session_file(path)
     client = ReadOnlyClient(telethon_client(cfg, session_path=path, receive_updates=False))
@@ -125,10 +125,10 @@ async def export_evidence(cfg, out) -> int:
         if not await client.is_user_authorized():
             log.error("Dedicated evidence session is not logged in. Run `python -m picasso_listener evidence-login` first.")
             return 3
-        result = await export_venmo_evidence(client, out)
+        result = await export_venmo_evidence(client, out, range_spec=range_spec)
     finally:
         await client.disconnect()
-    print(f"Exported {result['messages']} Venmo messages ({EVIDENCE_RANGE}) to {out}.")
+    print(f"Exported {result['messages']} Venmo messages ({range_spec}) to {out}.")
     print(f"SHA-256: {result['sha256']} (also written to {result['checksumPath']})")
     print("Nothing was sent to Picasso and no listener cursor was read or changed.")
     return 0
@@ -144,6 +144,7 @@ def main(argv=None) -> int:
     exp = sub.add_parser("export-history")
     exp.add_argument("--out", required=True)
     evidence = sub.add_parser("export-venmo-evidence")
+    evidence.add_argument("--ids", required=True, choices=APPROVED_EVIDENCE_RANGES)
     evidence.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -163,7 +164,7 @@ def main(argv=None) -> int:
     if args.command == "export-history":
         return asyncio.run(export(cfg, args.out))
     if args.command == "export-venmo-evidence":
-        return asyncio.run(export_evidence(cfg, args.out))
+        return asyncio.run(export_evidence(cfg, args.out, args.ids))
     return asyncio.run(run(cfg))
 
 
