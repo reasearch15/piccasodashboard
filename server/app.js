@@ -143,6 +143,8 @@ function createApp(config) {
     { method: 'POST', path: '/api/cashouts', roles: ANY_USER, publish: ['cashouts'], handler: ({ body, user }) => {
       // Saved first; Telegram delivery happens from the outbox, so a send
       // failure can never lose or duplicate the financial request.
+      // $0.00 TEST requests post into the live groups, so only admins may create them.
+      if (body.test === true && user.role !== ADMIN) throw new HttpError(403, 'Only admins can create test cash-outs.');
       const id = ledger.createCashout(body, user, { deliver: tg.enabled });
       telegram?.kick();
       return { status: 201, body: { id } };

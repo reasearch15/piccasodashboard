@@ -152,6 +152,65 @@ const LEDGER_MIGRATIONS = [
    ALTER TABLE demo_cashouts ADD COLUMN telegram_delete_next_at INTEGER;
    ALTER TABLE demo_cashouts ADD COLUMN telegram_deleted_at TEXT;
    ALTER TABLE demo_cashouts ADD COLUMN telegram_delete_error TEXT;`,
+  // v6: explicitly marked $0.00 TEST cash-outs. SQLite cannot change a CHECK
+  // constraint in place, so the table is rebuilt once: every row and column is
+  // copied unchanged, and the indexes are recreated. Real cash-outs keep the
+  // strict "amount > 0" rule; only is_test = 1 rows may (and must) be $0.00.
+  `CREATE TABLE demo_cashouts_v6 (
+     id TEXT PRIMARY KEY,
+     method TEXT NOT NULL CHECK (method IN ('Venmo', 'Chime')),
+     name TEXT NOT NULL,
+     amount_cents INTEGER NOT NULL,
+     status TEXT NOT NULL CHECK (status IN ('pending', 'done', 'cancelled')),
+     created_at TEXT NOT NULL,
+     created_by_id TEXT,
+     created_by TEXT,
+     completed_at TEXT,
+     completed_by_id TEXT,
+     completed_by TEXT,
+     cancelled_at TEXT,
+     cancelled_by_id TEXT,
+     cancelled_by TEXT,
+     settlement_id TEXT,
+     request_no INTEGER,
+     delivery_status TEXT NOT NULL DEFAULT 'not_required'
+       CHECK (delivery_status IN ('not_required', 'queued', 'sending', 'retrying', 'sent', 'failed', 'skipped')),
+     delivery_attempts INTEGER NOT NULL DEFAULT 0,
+     delivery_next_at INTEGER,
+     delivery_last_error TEXT,
+     delivered_at TEXT,
+     telegram_chat_id TEXT,
+     telegram_message_id INTEGER,
+     callback_token TEXT,
+     message_sync_needed INTEGER NOT NULL DEFAULT 0,
+     message_sync_attempts INTEGER NOT NULL DEFAULT 0,
+     message_sync_next_at INTEGER,
+     completed_via TEXT,
+     completed_by_telegram_id TEXT,
+     telegram_delete_status TEXT NOT NULL DEFAULT 'none'
+       CHECK (telegram_delete_status IN ('none', 'pending', 'deleted', 'already_absent', 'failed')),
+     telegram_delete_attempts INTEGER NOT NULL DEFAULT 0,
+     telegram_delete_next_at INTEGER,
+     telegram_deleted_at TEXT,
+     telegram_delete_error TEXT,
+     is_test INTEGER NOT NULL DEFAULT 0 CHECK (is_test IN (0, 1)),
+     CHECK ((is_test = 0 AND amount_cents > 0) OR (is_test = 1 AND amount_cents = 0))
+   );
+   INSERT INTO demo_cashouts_v6 (id, method, name, amount_cents, status, created_at, created_by_id, created_by, completed_at,
+     completed_by_id, completed_by, cancelled_at, cancelled_by_id, cancelled_by, settlement_id, request_no, delivery_status,
+     delivery_attempts, delivery_next_at, delivery_last_error, delivered_at, telegram_chat_id, telegram_message_id, callback_token,
+     message_sync_needed, message_sync_attempts, message_sync_next_at, completed_via, completed_by_telegram_id,
+     telegram_delete_status, telegram_delete_attempts, telegram_delete_next_at, telegram_deleted_at, telegram_delete_error, is_test)
+   SELECT id, method, name, amount_cents, status, created_at, created_by_id, created_by, completed_at,
+     completed_by_id, completed_by, cancelled_at, cancelled_by_id, cancelled_by, settlement_id, request_no, delivery_status,
+     delivery_attempts, delivery_next_at, delivery_last_error, delivered_at, telegram_chat_id, telegram_message_id, callback_token,
+     message_sync_needed, message_sync_attempts, message_sync_next_at, completed_via, completed_by_telegram_id,
+     telegram_delete_status, telegram_delete_attempts, telegram_delete_next_at, telegram_deleted_at, telegram_delete_error, 0
+   FROM demo_cashouts ORDER BY rowid;
+   DROP TABLE demo_cashouts;
+   ALTER TABLE demo_cashouts_v6 RENAME TO demo_cashouts;
+   CREATE UNIQUE INDEX demo_cashouts_callback ON demo_cashouts(callback_token) WHERE callback_token IS NOT NULL;
+   CREATE UNIQUE INDEX demo_cashouts_request_no ON demo_cashouts(request_no) WHERE request_no IS NOT NULL;`,
 ];
 
 function migrate(db, migrations) {

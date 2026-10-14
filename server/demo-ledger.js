@@ -54,6 +54,7 @@ const cashoutFromRow = r => ({
   deliveryStatus: r.delivery_status, deliveryAttempts: r.delivery_attempts, messageSyncAttempts: r.message_sync_attempts,
   telegramChatId: r.telegram_chat_id, telegramMessageId: r.telegram_message_id, callbackToken: r.callback_token,
   telegramDeleteStatus: r.telegram_delete_status, telegramDeleteAttempts: r.telegram_delete_attempts,
+  isTest: r.is_test === 1,
 });
 
 // Coarse removal status for the dashboard (no Telegram IDs or error text).
@@ -124,11 +125,13 @@ class DemoLedger {
       .run(record.id, record.method, record.createdAt, adminId, record.admin, JSON.stringify(record));
   }
 
-  // The full in-memory shape settlement-core.js operates on.
+  // The full in-memory shape settlement-core.js operates on. $0.00 TEST
+  // cash-outs are left out here, so they can never reach totals, running
+  // balances, settlement eligibility or settlement records.
   state() {
     return {
       payments: this.db.prepare('SELECT * FROM demo_payments').all().map(paymentFromRow),
-      cashouts: this.db.prepare('SELECT * FROM demo_cashouts').all().map(cashoutFromRow),
+      cashouts: this.db.prepare('SELECT * FROM demo_cashouts WHERE is_test = 0').all().map(cashoutFromRow),
       settlements: this.db.prepare('SELECT record_json FROM demo_settlements ORDER BY seq').all().map(r => JSON.parse(r.record_json)),
     };
   }
@@ -143,15 +146,18 @@ class DemoLedger {
     }));
   }
 
+  // Real and TEST cash-outs, for the Cash Out page only.
   listCashouts() {
     const s = this.state();
-    return s.cashouts.map(o => ({
+    const all = this.db.prepare('SELECT * FROM demo_cashouts').all().map(cashoutFromRow);
+    return all.map(o => ({
       id: o.id, method: o.method, name: o.name, amountCents: o.amountCents, status: o.status,
       createdAt: o.createdAt, createdById: o.createdById, createdBy: o.createdBy, completedAt: o.completedAt,
       cancelledAt: o.cancelledAt, cancelledBy: o.cancelledBy,
       telegramRemoval: PUBLIC_REMOVAL[o.telegramDeleteStatus] ?? null,
       completedBy: o.completedBy, requestId: o.requestNo ? requestId(o.requestNo) : null, deliveryStatus: PUBLIC_DELIVERY[o.deliveryStatus] ?? null,
-      settled: o.status === 'done' && s.settlements.some(x => x.method === o.method && x.cashouts.some(t => t.id === o.id)),
+      isTest: o.isTest,
+      settled: !o.isTest && o.status === 'done' && s.settlements.some(x => x.method === o.method && x.cashouts.some(t => t.id === o.id)),
     }));
   }
 
@@ -164,20 +170,24 @@ class DemoLedger {
 
   // Persists the request first. When `deliver` is set it is also queued in the
   // Telegram outbox; delivery is tracked separately from financial status.
-  createCashout({ method, name, amount }, user, { deliver = false } = {}) {
+  // `test: true` creates an explicitly marked $0.00 TEST request (amount must
+  // be exactly zero); every other request needs a strictly positive amount.
+  createCashout({ method, name, amount, test = false }, user, { deliver = false } = {}) {
     const trimmed = typeof name === 'string' ? name.trim() : '';
-    const amountCents = parseCents(amount);
+    if (test !== true && test !== false) throw err(400, 'Invalid test flag.');
+    const amountCents = test ? (isZeroAmount(amount) ? 0 : null) : parseCents(amount);
     if (!Core.METHODS.includes(method)) throw err(400, 'Choose Venmo or Chime.');
+    if (test && amountCents === null) throw err(400, 'A test cash-out must be exactly $0.00.');
     if (!trimmed || trimmed.length > 80 || /[\u0000-\u001f\u007f]/.test(trimmed) || amountCents === null) throw err(400, 'Enter a valid name and positive amount with no more than two decimals.');
     return transaction(this.db, () => {
       const id = this.nextId('out');
       const requestNo = Number(this.meta('cashout_no') || 0) + 1;
       this.setMeta('cashout_no', requestNo);
       this.db.prepare(`INSERT INTO demo_cashouts (id, method, name, amount_cents, status, created_at, created_by_id, created_by,
-                         request_no, delivery_status, delivery_next_at, callback_token)
-                       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`)
+                         request_no, delivery_status, delivery_next_at, callback_token, is_test)
+                       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, method, trimmed, amountCents, new Date().toISOString(), user.id, user.username, requestNo,
-          deliver ? 'queued' : 'not_required', deliver ? Date.now() : null, deliver ? crypto.randomBytes(16).toString('hex') : null);
+          deliver ? 'queued' : 'not_required', deliver ? Date.now() : null, deliver ? crypto.randomBytes(16).toString('hex') : null, test ? 1 : 0);
       return id;
     });
   }
@@ -432,6 +442,11 @@ class DemoLedger {
       return record;
     });
   }
+}
+
+// Only for explicitly marked TEST requests: "0", "0.0" or "0.00".
+function isZeroAmount(value) {
+  return typeof value === 'string' && /^0(\.0{1,2})?$/.test(value.trim());
 }
 
 function parseCents(value) {

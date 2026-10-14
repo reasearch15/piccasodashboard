@@ -7,11 +7,14 @@ const requestId = no => `CO-${String(no).padStart(6, '0')}`;
 const STATUS = { pending: 'PENDING', done: 'COMPLETED', cancelled: 'CANCELLED' };
 
 function cashoutText(o) {
+  // The first line stays "PICASSO CASH OUT" so the shared-group classifier
+  // keeps recognising (and ignoring) our own posts, test or not.
   const lines = [
     'PICASSO CASH OUT',
+    ...(o.isTest ? ['TEST REQUEST: not a real payment, do not send money'] : []),
     `Method: ${o.method}`,
     `Recipient: ${o.name}`,
-    `Amount: ${money(o.amountCents)}`,
+    `Amount: ${o.isTest ? 'TEST — $0.00' : money(o.amountCents)}`,
     `Requested by: ${o.createdBy}`,
     `Request ID: ${requestId(o.requestNo)}`,
     `Status: ${STATUS[o.status]}`,

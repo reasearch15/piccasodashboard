@@ -468,26 +468,36 @@ describe('18. Existing demo ledger and history survive the v2 migration', () => 
   it('a v1 database migrates in place with every record intact', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'picasso-mig-'));
     try {
-      // Build a genuine v1 database: v1 schema only, seeded, with a settlement.
+      // Build a genuine v1 database: v1 schema only, seeded (the seed uses
+      // plain INSERTs), plus a settlement written exactly as v1 stored it.
       const v1 = new DatabaseSync(path.join(dir, 'demo-ledger.db'));
       v1.exec('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
       v1.exec(LEDGER_MIGRATIONS[0]);
       v1.prepare('INSERT INTO schema_migrations VALUES (1, ?)').run(new Date().toISOString());
       const ledgerV1 = new DemoLedger(v1);
-      ledgerV1.db.prepare("UPDATE demo_payments SET status='accepted', accepted_at=?, accepted_by_id='staff-x', accepted_by='Riley', accept_order=8 WHERE id='p1'").run(new Date().toISOString());
-      ledgerV1.commitSettlement('p1', { id: 'admin-x', username: 'CharsiNew' });
-      const snapshot = JSON.stringify(ledgerV1.state());
+      v1.prepare("UPDATE demo_payments SET status='accepted', accepted_at='2026-10-14T00:00:00Z', accepted_by_id='staff-x', accepted_by='Riley', accept_order=8 WHERE id='p1'").run();
+      ledgerV1.insertSettlement({ id: 'SET-V1', method: 'Venmo', createdAt: '2026-10-14T01:00:00Z', admin: 'CharsiNew', incoming: [{ id: 'p1', name: 'Larry Forkner', amountCents: 2000, acceptedById: 'staff-x', acceptedBy: 'Riley' }], cashouts: [{ id: 'o1', amountCents: 30000 }], incomingCents: 2000, outgoingCents: 30000, netCents: -28000, remainingCents: 0 }, 'admin-x');
+      v1.prepare("UPDATE demo_cashouts SET settlement_id = 'SET-V1' WHERE id = 'o1'").run();
+      const tables = ['demo_payments', 'demo_cashouts', 'demo_settlements', 'demo_meta'];
+      const snap = db => Object.fromEntries(tables.map(t => [t, db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all().map(r => ({ ...r }))]));
+      const before = snap(v1);
       v1.close();
 
       const migrated = openLedgerDb(dir);
       assert.equal(migrated.prepare('SELECT MAX(version) v FROM schema_migrations').get().v, LEDGER_MIGRATIONS.length);
+      const after = snap(migrated);
+      // Every v1 column of every row is byte-for-byte unchanged; only new
+      // columns (with their defaults) were added.
+      for (const t of tables) {
+        assert.equal(after[t].length, before[t].length, t);
+        const cols = Object.keys(before[t][0] || {});
+        assert.deepEqual(after[t].map(r => Object.fromEntries(cols.map(c => [c, r[c]]))), before[t], t);
+      }
+      assert.ok(after.demo_cashouts.every(o => o.delivery_status === 'not_required' && o.telegram_message_id === null && o.is_test === 0));
+      // The current code reads the migrated data correctly.
       const ledger = new DemoLedger(migrated);
-      const after = ledger.state();
-      // Old fields identical; only new Telegram fields (null/defaults) appear.
-      const strip = st => JSON.stringify({ ...st, cashouts: st.cashouts.map(({ requestNo, deliveryStatus, deliveryAttempts, messageSyncAttempts, telegramChatId, telegramMessageId, callbackToken, telegramDeleteStatus, telegramDeleteAttempts, ...rest }) => rest) });
-      assert.equal(strip(after), strip(JSON.parse(snapshot)));
-      assert.ok(after.cashouts.every(o => o.deliveryStatus === 'not_required' && o.telegramMessageId === null));
-      assert.equal(after.settlements.at(-1).incoming.find(x => x.id === 'p1').acceptedBy, 'Riley');
+      assert.equal(ledger.listSettlements().at(-1).incoming.find(x => x.id === 'p1').acceptedBy, 'Riley');
+      assert.equal(ledger.listCashouts().find(o => o.id === 'o1').settled, true);
       assert.ok(migrated.prepare("SELECT COUNT(*) n FROM demo_payments WHERE source = 'demo'").get().n >= 11);
       migrated.close();
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
