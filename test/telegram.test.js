@@ -233,21 +233,40 @@ describe('Telegram bridge (mocked Bot API)', () => {
     assert.equal(tg.callsOf('answerCallbackQuery')[0].params.text, 'Marked completed.');
   });
 
-  it('10. unauthorized users, forged tokens and mismatched messages cannot complete', async () => {
+  it('10. any human member can complete; bots, non-members and mismatched messages cannot', async () => {
     const o = await newCashout('Venmo', '12.00');
-    await srv.telegram.handleUpdate(cbUpdate(o, STRANGER));
+    const nonMember = await newCashout('Venmo', '13.00');
+    tg.state.members.set(`${CHATS.venmoOut}:${STRANGER}`, { status: 'left', user: { id: STRANGER, is_bot: false } });
+    await srv.telegram.handleUpdate(cbUpdate(nonMember, STRANGER));
+    const bot = cbUpdate(nonMember, COMPLETER);
+    bot.callback_query.from.is_bot = true;
+    await srv.telegram.handleUpdate(bot);
     await srv.telegram.handleUpdate(cbUpdate(o, COMPLETER, { data: `c:${'0'.repeat(32)}` }));
     await srv.telegram.handleUpdate(cbUpdate(o, COMPLETER, { mid: o.telegramMessageId + 99 }));
     await srv.telegram.handleUpdate(cbUpdate(o, COMPLETER, { chat: CHATS.chimeOut }));
     await srv.telegram.handleUpdate(cbUpdate(o, COMPLETER, { botId: 1 }));
-    const spoof = cbUpdate(o, STRANGER);
-    spoof.callback_query.from.first_name = 'Alice';
-    spoof.callback_query.from.last_name = 'Ops';
-    spoof.callback_query.from.username = 'alice_ops';
-    await srv.telegram.handleUpdate(spoof);
     assert.equal((await cashout(o.id)).status, 'pending');
+    assert.equal((await cashout(nonMember.id)).status, 'pending');
     const outcomes = events().slice(-6).map(e => e.outcome);
-    assert.deepEqual(outcomes, ['rejected_unauthorized_user', 'rejected_unknown_request', 'rejected_message_mismatch', 'rejected_message_mismatch', 'rejected_message_mismatch', 'rejected_unauthorized_user']);
+    assert.deepEqual(outcomes, ['rejected_unauthorized_user', 'rejected_unauthorized_user', 'rejected_unknown_request', 'rejected_message_mismatch', 'rejected_message_mismatch', 'rejected_message_mismatch']);
+    tg.state.members.delete(`${CHATS.venmoOut}:${STRANGER}`);
+    const member = await newCashout('Venmo', '14.00');
+    await srv.telegram.handleUpdate(cbUpdate(member, STRANGER));
+    assert.equal((await cashout(member.id)).status, 'done', 'no individual allowlist is required');
+  });
+
+  it('10b. an admin explicitly queues one historical pending request without duplicates', async () => {
+    const id = srv.ledger.createCashout({ method: 'Chime', name: '@historical', amount: '6.00' }, { id: staffId, username: 'jordan' });
+    assert.equal((await cashout(id)).deliveryStatus, null);
+    assert.equal((await staff.post(`/api/cashouts/${id}/queue-telegram-delivery`)).status, 403);
+    assert.equal((await admin.post(`/api/cashouts/${id}/queue-telegram-delivery`)).status, 204);
+    assert.equal((await admin.post(`/api/cashouts/${id}/queue-telegram-delivery`)).status, 409);
+    tg.state.calls.length = 0;
+    await srv.telegram.processOutbox();
+    const sends = tg.callsOf('sendMessage');
+    assert.equal(sends.length, 1);
+    assert.equal(String(sends[0].params.chat_id), CHATS.chimeOut);
+    assert.equal((await cashout(id)).deliveryStatus, 'delivered');
   });
 
   it('11. repeated callbacks / duplicate updates do not double-count', async () => {
@@ -439,8 +458,7 @@ describe('Telegram polling, webhook and configuration', () => {
     assert.throws(() => loadTelegramConfig({ ...env, PICASSO_TELEGRAM_VENMO_INCOMING_CHAT_ID: CHATS.chimeIn, PICASSO_TELEGRAM_ALLOW_SHARED_GROUPS: 'true' }), /must be different/);
     assert.throws(() => loadTelegramConfig({ ...env, PICASSO_TELEGRAM_VENMO_CASHOUT_CHAT_ID: CHATS.chimeOut }), /more than one role/);
     assert.equal(loadTelegramConfig({ ...env, PICASSO_TELEGRAM_VENMO_CASHOUT_CHAT_ID: CHATS.chimeOut, PICASSO_TELEGRAM_ALLOW_SHARED_GROUPS: 'true' }).enabled, true);
-    assert.throws(() => loadTelegramConfig({ ...env, PICASSO_TELEGRAM_COMPLETER_IDS: '' }), /COMPLETER_IDS/);
-    assert.throws(() => loadTelegramConfig({ ...env, PICASSO_TELEGRAM_COMPLETER_IDS: 'alice' }), /COMPLETER_IDS/);
+    assert.equal(loadTelegramConfig({ ...env, PICASSO_TELEGRAM_COMPLETER_IDS: '' }).enabled, true, 'no individual completer allowlist is required');
     assert.throws(() => loadTelegramConfig({ ...env, PICASSO_TELEGRAM_CHIME_CASHOUT_CHAT_ID: 'my-group' }), /CHIME_CASHOUT/);
     assert.throws(() => loadTelegramConfig({ ...env, PICASSO_TELEGRAM_MODE: 'webhook' }), /WEBHOOK_SECRET/);
     assert.throws(() => loadTelegramConfig({ ...env, PICASSO_TELEGRAM_MODE: 'both' }), /off, polling or webhook/);

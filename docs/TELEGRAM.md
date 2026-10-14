@@ -9,7 +9,7 @@ owner approves (see "Staged rollout").
 ```
 Telegram ──getUpdates (polling) or POST /api/telegram/webhook──▶ TelegramBot.handleUpdate
    │                                                               ├─ message  → parser → ledger.createIncomingPayment (pending)
-   │                                                               └─ callback → allowlist + mapping checks → ledger.completeCashoutFromTelegram
+   │                                                               └─ callback → membership + mapping checks → ledger.completeCashoutFromTelegram
    ◀── sendMessage / editMessageText ── outbox worker (every 3 s + on demand)
 Dashboard ◀── SSE /api/events ("payments/cashouts changed") ── reloads via role-checked APIs
 ```
@@ -29,14 +29,14 @@ Key safety properties:
 * Message edits are retried independently and can never reverse a completion.
 * Incoming payments are deduplicated by a unique `(chat_id, message_id)` index.
 * Button `callback_data` is a random 128-bit token. It is resolved server-side and must also match the stored chat and message ID, and the message must come from this bot.
-* Only numeric Telegram user IDs in `PICASSO_TELEGRAM_COMPLETER_IDS` can complete cash-outs; names and usernames are never trusted.
+* Any current human member of the exact cash-out group can complete. Membership is checked with `getChatMember`; bots, former members, and unverifiable membership are rejected.
 * While Telegram is on, the dashboard's "Demo: Mark Done" button is removed and its API returns 409.
 * No Telegram chat IDs, message IDs, group names or error text are sent to the dashboard.
 
 ## Environment variables
 
 See `.env.example`. Required when `PICASSO_TELEGRAM_MODE` is `polling` or `webhook`:
-`PICASSO_TELEGRAM_BOT_TOKEN` and the four `…_CHAT_ID` values. `PICASSO_TELEGRAM_COMPLETER_IDS` is also required.
+`PICASSO_TELEGRAM_BOT_TOKEN` and the four `…_CHAT_ID` values.
 Webhook mode adds `PICASSO_TELEGRAM_WEBHOOK_SECRET`.
 `PICASSO_TELEGRAM_ALLOW_LIVE=true` is required before the server will contact `api.telegram.org`.
 
@@ -45,6 +45,7 @@ Webhook mode adds `PICASSO_TELEGRAM_WEBHOOK_SECRET`.
 1. **Privacy mode:** in @BotFather → Bot Settings → Group Privacy → **Turn off**, *or* make the bot an admin in the two incoming groups. Otherwise the bot cannot read payment messages.
 2. **Incoming groups:** the bot needs only to be a member who can read messages.
 3. **Cash-out groups:** the bot must be able to **send messages**. It edits only its own messages, which needs no extra right.
+   The bot must be an administrator so `getChatMember` can reliably verify every clicker's current membership.
 4. **Bots cannot see other bots' messages.** If payment notifications are posted by another bot, this bridge will never receive them. Notifications must come from a user account or be forwarded by one.
 5. Get chat IDs and user IDs from a test group first (e.g. via `getUpdates` on a test bot), never by guessing.
 
@@ -153,7 +154,7 @@ The Bot API cannot read Larry's BOT. Proposal:
   3. Payment → pending payment.
   4. Adjustment or other money-like text → Admin Attention.
   5. Anything else → no record.
-* **Completed.** Only numeric Telegram user IDs listed in `PICASSO_TELEGRAM_COMPLETER_IDS` can complete, whether staff or admin. List the admin's Telegram ID there too if they should be able to complete.
+* **Completed.** Any current human member of the exact cash-out group can complete. The callback's user ID is verified with `getChatMember`; bots and non-members are rejected.
   * The request must still be pending, and the press must come from the exact bot message mapped server-side.
   * A completion is recorded once (pending → done) and counts the requested amount.
   * The message is then edited to COMPLETED with no button.

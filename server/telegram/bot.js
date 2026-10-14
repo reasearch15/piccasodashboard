@@ -152,8 +152,22 @@ class TelegramBot {
       this.ledger.logTelegramEvent({ ...base, outcome: 'rejected_message_mismatch', refId: cashout.id });
       return answer('This button does not match its request.');
     }
-    // Authorization is by numeric Telegram user ID only, never names.
-    if (!this.cfg.completerIds.has(telegramUserId) || cq.from?.is_bot) {
+    // Bots can never complete. Humans must still belong to this exact group at
+    // click time; membership lookup failure is denied rather than guessed.
+    if (!telegramUserId || cq.from?.is_bot) {
+      this.ledger.logTelegramEvent({ ...base, outcome: 'rejected_unauthorized_user', refId: cashout.id });
+      return answer('You are not authorized to complete cash-outs.');
+    }
+    let member;
+    try {
+      member = await this.api.call('getChatMember', { chat_id: expectedChat, user_id: telegramUserId });
+    } catch (e) {
+      this.ledger.logTelegramEvent({ ...base, outcome: 'rejected_membership_unverified', refId: cashout.id, detail: e.message.slice(0, 200) });
+      return answer('Could not verify group membership. Try again.');
+    }
+    const activeMember = ['creator', 'administrator', 'member'].includes(member?.status)
+      || (member?.status === 'restricted' && member.is_member === true);
+    if (!activeMember || member?.user?.is_bot || String(member?.user?.id ?? '') !== telegramUserId) {
       this.ledger.logTelegramEvent({ ...base, outcome: 'rejected_unauthorized_user', refId: cashout.id });
       return answer('You are not authorized to complete cash-outs.');
     }

@@ -171,6 +171,13 @@ function createApp(config) {
       telegram.kick();
       return { status: 204 };
     } },
+    { method: 'POST', path: '/api/cashouts/:id/queue-telegram-delivery', roles: ADMIN_ONLY, publish: ['cashouts'], handler: ({ params, user }) => {
+      if (!tg.enabled) throw new HttpError(409, 'Telegram delivery is not enabled.');
+      ledger.queueHistoricalDelivery(params.id);
+      accounts.audit(user, 'cashout_historical_delivery_queued', { id: params.id, username: null });
+      telegram.kick();
+      return { status: 204 };
+    } },
 
     // Admin Attention (admin only). Acknowledgement only: never alters totals.
     { method: 'GET', path: '/api/attention', roles: ADMIN_ONLY, handler: () => ({ body: ledger.listAttention() }) },

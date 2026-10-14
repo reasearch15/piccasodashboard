@@ -13,6 +13,7 @@ async function startMockTelegram(token) {
     updates: [],
     botId: 424242,
     delayMs: {},       // method -> milliseconds before answering (simulates an in-flight request)
+    members: new Map(), // optional "chat:user" -> Telegram membership result
   };
   const server = http.createServer((req, res) => {
     let body = '';
@@ -43,6 +44,11 @@ async function startMockTelegram(token) {
         case 'sendMessage': return reply(200, { ok: true, result: { message_id: ++state.nextMessageId, chat: { id: Number(params.chat_id) }, from: { id: state.botId, is_bot: true }, date: Math.floor(Date.now() / 1000), text: params.text } });
         case 'editMessageText': return reply(200, { ok: true, result: { message_id: params.message_id } });
         case 'answerCallbackQuery': return reply(200, { ok: true, result: true });
+        case 'getChatMember': {
+          const key = `${params.chat_id}:${params.user_id}`;
+          const result = state.members.get(key) || { status: 'member', user: { id: Number(params.user_id), is_bot: false } };
+          return reply(200, { ok: true, result });
+        }
         case 'deleteMessage': {
           // Real Telegram answers "message to delete not found" for a second delete.
           state.deleted ??= new Set();

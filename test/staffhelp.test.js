@@ -85,16 +85,17 @@ describe('StaffHelp bot: completion, admin cancellation, shared groups', () => {
     assert.deepEqual(edit.params.reply_markup, { inline_keyboard: [] });
   });
 
-  it('admin (Telegram ID on the allowlist) can complete too', async () => {
+  it('any human group member can complete', async () => {
     const o = await newCashout('Venmo', '12.00');
     await press(o, ADMIN_TG, 'Owner');
     assert.equal((await view(o.id)).status, 'done');
   });
 
-  it('unauthorized Telegram users cannot complete; requested amounts never count until completed', async () => {
+  it('non-members cannot complete; requested amounts never count until completed', async () => {
     const before = await totals('Chime');
     const o = await newCashout('Chime', '99.00');
     assert.deepEqual(await totals('Chime'), before, 'creating a request pays nothing');
+    tg.state.members.set(`${CHIME}:${STRANGER_TG}`, { status: 'left', user: { id: STRANGER_TG, is_bot: false } });
     await press(o, STRANGER_TG);
     assert.equal(lastEvent(), 'rejected_unauthorized_user');
     assert.equal((await view(o.id)).status, 'pending');

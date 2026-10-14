@@ -352,6 +352,18 @@ class DemoLedger {
     if (!r.changes) throw err(409, 'Only pending cash-outs whose delivery failed can be retried.');
   }
 
+  // Explicit recovery for pending requests created while Telegram was off.
+  // The conditional transition makes repeated admin clicks harmless.
+  queueHistoricalDelivery(id) {
+    const token = crypto.randomBytes(16).toString('hex');
+    const r = this.db.prepare(`UPDATE demo_cashouts SET delivery_status = 'queued', delivery_attempts = 0,
+                                 delivery_next_at = ?, callback_token = ?
+                               WHERE id = ? AND status = 'pending' AND delivery_status = 'not_required'
+                                 AND telegram_chat_id IS NULL AND telegram_message_id IS NULL AND callback_token IS NULL`)
+      .run(Date.now(), token, id);
+    if (!r.changes) throw err(409, 'Only an undelivered pending cash-out created while Telegram was off can be queued.');
+  }
+
   // A crash between "claim" and "record message ID" leaves rows in 'sending';
   // they are retried on startup. That may duplicate the Telegram message, never
   // the financial request (the orphan's button is rejected by message-ID check).

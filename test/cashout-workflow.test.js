@@ -94,11 +94,12 @@ describe('Outgoing cash-out workflow (TEST and real)', () => {
         }
       });
 
-      it('Completed button: allowlisted user completes once; strangers rejected; message updated', async () => {
+      it('Completed button: a human member completes once; non-members are rejected; message updated', async () => {
         const before = await totals();
         const o = await delivered(kind);
+        tg.state.members.set(`${o.telegramChatId}:${STRANGER}`, { status: 'left', user: { id: STRANGER, is_bot: false } });
         await press(o, STRANGER);
-        assert.equal((await view(o.id)).status, 'pending', 'stranger rejected');
+        assert.equal((await view(o.id)).status, 'pending', 'non-member rejected');
         await Promise.all([press(o), press(o), press(o)]);
         assert.equal((await view(o.id)).status, 'done');
         const done = srv.ledger.db.prepare("SELECT COUNT(*) n FROM telegram_events WHERE ref_id = ? AND outcome = 'cashout_completed'").get(o.id).n;

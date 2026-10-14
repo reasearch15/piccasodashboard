@@ -45,10 +45,8 @@ function loadTelegramConfig(env = process.env) {
     errors.push('A chat is configured for more than one role. Set PICASSO_TELEGRAM_ALLOW_SHARED_GROUPS=true if that is intentional.');
   }
 
-  const completerIds = (env.PICASSO_TELEGRAM_COMPLETER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (!completerIds.length || completerIds.some(id => !/^\d{1,20}$/.test(id))) {
-    errors.push('PICASSO_TELEGRAM_COMPLETER_IDS must list the numeric Telegram user IDs allowed to complete cash-outs.');
-  }
+  // Completion authorization is checked against current membership in the
+  // exact cash-out group at click time; no per-user allowlist is required.
 
   const webhookSecret = env.PICASSO_TELEGRAM_WEBHOOK_SECRET || '';
   if (mode === 'webhook' && !SECRET_RE.test(webhookSecret)) {
@@ -75,7 +73,6 @@ function loadTelegramConfig(env = process.env) {
     webhookSecret,
     ingestSecret,
     venmoParser,
-    completerIds: new Set(completerIds),
     incomingMethodByChat: new Map([[groups.chimeIncoming, 'Chime'], [groups.venmoIncoming, 'Venmo']]),
     cashoutChatByMethod: { Chime: groups.chimeCashout, Venmo: groups.venmoCashout },
     configuredChats: new Set(ids),
