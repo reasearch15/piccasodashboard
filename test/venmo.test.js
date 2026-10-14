@@ -21,7 +21,8 @@ const venmo = ({ greet = 'Hi @Test-Handle,', amount = '20.0', sender = 'Test Pay
 const chime = (o = {}) => venmo({ greet: 'Hi $Test-Tag-1,', ...o });
 
 describe('venmo-v1 parser', () => {
-  it('parses Larry\'s multiline Venmo notification: amount only from the "You received" line', () => {
+  it('parses bare, @ and $ recipient greetings; amount only from the "You received" line', () => {
+    assert.deepEqual(parseVenmoMessage(venmo({ greet: 'Hi puaoi1961,' })), { ok: true, name: 'Test Payer', amountCents: 2000, recipient: 'puaoi1961', parserVersion: 'venmo-v1' });
     assert.deepEqual(parseVenmoMessage(venmo()), { ok: true, name: 'Test Payer', amountCents: 2000, recipient: '@Test-Handle', parserVersion: 'venmo-v1' });
     assert.equal(parseVenmoMessage(venmo({ greet: 'Hi $Test-Tag-2,' })).recipient, '$Test-Tag-2');
     for (const [amount, cents] of [['20', 2000], ['20.0', 2000], ['20.00', 2000], ['1,250.5', 125050], ['0.99', 99]]) {
@@ -33,16 +34,34 @@ describe('venmo-v1 parser', () => {
   it('rejects anything ambiguous, malformed or unknown (never guesses)', () => {
     for (const [text, reason] of [
       [venmo({ extra: ['You received $5.00 from Someone Else.'] }), 'ambiguous_amount'],
+      [venmo({ greet: 'Hi puaoi1961,', extra: ['Hi @OtherHandle,'] }), 'ambiguous_recipient'],
       [venmo({ amount: '20.000' }), 'malformed'],
       [venmo({ amount: '-20' }), 'malformed'],
       [venmo({ amount: '0' }), 'invalid_amount'],
       [venmo({ sender: '12345' }), 'malformed'],
       [venmo({ greet: 'Hi Test Handle,' }), 'unexpected_line'],
+      [venmo({ greet: 'Hi -leading-hyphen,' }), 'unexpected_line'],
+      [venmo({ greet: 'Hi @@double-sigil,' }), 'unexpected_line'],
+      [venmo({ greet: 'Hi puaoi1961, trailing' }), 'unexpected_line'],
       [venmo({ greet: 'Hello @Test-Handle,' }), 'unexpected_line'],
       [venmo({ extra: ['Payment pending review'] }), 'unexpected_line'],
       [venmo().replace(/^.*Hi.*\n/u, ''), 'missing_recipient'],
       [venmo({ amount: '999,999,999' }), 'amount_out_of_range'],
     ]) assert.equal(parseVenmoMessage(text).reason, reason, text);
+  });
+
+  it('rejects the three verified non-payment messages without using their dollar values', () => {
+    const cases = [
+      ['Forwarded payment retracted', 'none'],
+      ['Total In adjusted by -26.00$', 'attention'],
+      ['MILESTONE HIT — $10,000 IN!', 'attention'],
+    ];
+    for (const [text, expectedKind] of cases) {
+      assert.equal(parseVenmoMessage(text).ok, false, text);
+      const classified = classifyMessage(text, 'Venmo', { venmoParser: 'venmo-v1' });
+      assert.equal(classified.kind, expectedKind, text);
+      assert.notEqual(classified.kind, 'payment', text);
+    }
   });
 
   it('classification: opt-in only; summaries, adjustments and cash-outs behave as before', () => {

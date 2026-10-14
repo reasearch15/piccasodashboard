@@ -70,8 +70,8 @@ function parseChimeMessage(text) {
 }
 
 // ---- Venmo (venmo-v1, explicit opt-in) ---------------------------------------
-// Same layout as chime-v1. The greeting may carry the recipient as a cash-tag
-// style "$Tag" or a Venmo "@handle"; nothing else is accepted.
+// Same layout as chime-v1. The greeting may carry the recipient as a bare
+// Venmo handle, cash-tag style "$Tag", or Venmo "@handle".
 //
 //   🟢 Hi @Test-Handle,
 //   You received $20.0 from Test Payer.
@@ -79,9 +79,9 @@ function parseChimeMessage(text) {
 //   ➕ Total In: 35.00$
 //   ➖ Total Out: 0.00$
 const VENMO_PARSER_VERSION = 'venmo-v1';
-const VENMO_GREETING = /^(?:\p{Extended_Pictographic}\uFE0F?\s*)?Hi (?<sigil>[$@])(?<tag>[A-Za-z0-9][A-Za-z0-9_-]{0,63}),?$/u;
+const VENMO_GREETING = /^(?:\p{Extended_Pictographic}\uFE0F?\s*)?Hi (?<sigil>[$@]?)(?<tag>[A-Za-z0-9][A-Za-z0-9_-]{0,63}),?$/u;
 function parseVenmoMessage(text) {
-  return parseLarryMessage(text, { greeting: VENMO_GREETING, version: VENMO_PARSER_VERSION, recipient: g => `${g.sigil}${g.tag}` });
+  return parseLarryMessage(text, { greeting: VENMO_GREETING, version: VENMO_PARSER_VERSION, recipient: g => `${g.sigil || ''}${g.tag}` });
 }
 
 // ---- Venmo (provisional) ---------------------------------------------------
