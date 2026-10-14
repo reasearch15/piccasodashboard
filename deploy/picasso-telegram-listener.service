@@ -1,0 +1,45 @@
+# /etc/systemd/system/picasso-telegram-listener.service
+# Picasso's own read-only Telegram user-account listener.
+# Separate Linux user (picasso-tg), separate session and state, separate unit.
+# Does not reference TeleLedger, Atlas, Royal VIP, AppBeg or their sessions.
+[Unit]
+Description=Picasso Dashboard Telegram listener (read-only, user account)
+After=network-online.target picasso-dashboard.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=picasso-tg
+Group=picasso-tg
+WorkingDirectory=/opt/picasso-telegram-listener
+EnvironmentFile=/etc/picasso-telegram-listener/listener.env
+# Code comes from the Picasso checkout (read-only); Telethon from a private venv.
+Environment=PYTHONPATH=/opt/picasso-dashboard/app/listener
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/opt/picasso-telegram-listener/venv/bin/python -m picasso_listener check
+ExecStart=/opt/picasso-telegram-listener/venv/bin/python -m picasso_listener run
+Restart=on-failure
+RestartSec=15
+# A bad session or configuration exits with 2/3: do not hammer Telegram.
+RestartPreventExitStatus=2 3
+StartLimitIntervalSec=600
+StartLimitBurst=10
+TimeoutStopSec=20
+
+# Hardening: only the state directory is writable; no access to Picasso's data.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/picasso-telegram-listener/state
+InaccessiblePaths=/opt/picasso-dashboard/data /opt/picasso-dashboard/backups /etc/picasso-dashboard
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

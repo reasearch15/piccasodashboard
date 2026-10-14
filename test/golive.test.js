@@ -24,7 +24,7 @@ const env = base => ({
   PICASSO_TELEGRAM_MODE: 'polling', PICASSO_TELEGRAM_BOT_TOKEN: TOKEN, PICASSO_TELEGRAM_API_BASE: base,
   PICASSO_TELEGRAM_CHIME_INCOMING_CHAT_ID: CHIME, PICASSO_TELEGRAM_VENMO_INCOMING_CHAT_ID: VENMO,
   PICASSO_TELEGRAM_CHIME_CASHOUT_CHAT_ID: '-5000000203', PICASSO_TELEGRAM_VENMO_CASHOUT_CHAT_ID: '-5000000204',
-  PICASSO_TELEGRAM_COMPLETER_IDS: '1', PICASSO_LISTENER_INGEST_SECRET: SECRET,
+  PICASSO_TELEGRAM_COMPLETER_IDS: '1', PICASSO_LISTENER_INGEST_SECRET: SECRET, PICASSO_PAYMENT_SOURCE_SENDER_IDS: '777000111',
 });
 const chime = (sender, amount, tag = 'Synthetic-Payee-1') =>
   ['\u{1F7E2} Hi $' + tag + ',', 'You received $' + amount + ' from ' + sender + '.', '08:39 PM - 14 Oct 2026', '➕ Total In: 15.00$', '➖ Total Out: 0.00$'].join('\n');
@@ -34,7 +34,7 @@ let mid = 9000;
 describe('Go-live safeguards (production ledger, activation boundary)', () => {
   let tg, srv, admin, staff, reuse;
   const ingest = body => fetch(`${srv.base}/api/ingest/telegram-message`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Picasso-Ingest-Secret': SECRET }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Picasso-Ingest-Secret': SECRET }, body: JSON.stringify({ senderId: 777000111, ...body }),
   }).then(r => r.json());
   const names = () => srv.ledger.listPayments().map(p => p.name);
   const login = async () => {
@@ -75,10 +75,10 @@ describe('Go-live safeguards (production ledger, activation boundary)', () => {
       { label: 'Oct 12 23:00 UTC', date: at('2026-10-12T23:00:00Z') },
       { label: 'Oct 12 18:00 UTC', date: at('2026-10-12T18:00:00Z') },
       { label: 'Oct 14', date: at('2026-10-14T14:54:00+05:45') },
-    ].map(m => ({ chatId: CHIME, messageId: ++mid, date: m.date, text: chime(m.label.replace(/[^A-Za-z ]/g, '').trim() || 'X', '10') }));
+    ].map(m => ({ chatId: CHIME, senderId: 777000111, messageId: ++mid, date: m.date, text: chime(m.label.replace(/[^A-Za-z ]/g, '').trim() || 'X', '10') }));
     const p = previewBackfill(srv.ledger, srv.config.telegram, msgs);
     assert.equal(p.counts.before_cutoff, 3);
-    assert.equal(p.counts.payment, 4);
+    assert.equal(p.counts.payment_candidate, 4);
     assert.equal(srv.ledger.listPayments().length, 0, 'preview writes nothing');
     applyBackfill(srv.telegram, msgs, { approvedBy: 'owner (test)' });
     assert.deepEqual(names().sort(), ['Oct UTC', 'Oct UTC', 'Oct', 'exactly at boundary'].sort());
@@ -111,7 +111,7 @@ describe('Go-live safeguards (production ledger, activation boundary)', () => {
     const now = Math.floor(Date.now() / 1000);
     assert.equal((await ingest({ chatId: CHIME, messageId: ++mid, date: now, text: "Larry's BOT\nTotal In adjusted by -8.00$" })).outcome, 'created');
     const before = srv.ledger.listAttention().events.length;
-    const old = [{ chatId: CHIME, messageId: ++mid, date: BOUNDARY_S - 60, text: "Larry's BOT\nTotal Out adjusted by 5.00$" }];
+    const old = [{ chatId: CHIME, senderId: 777000111, messageId: ++mid, date: BOUNDARY_S - 60, text: "Larry's BOT\nTotal Out adjusted by 5.00$" }];
     applyBackfill(srv.telegram, old, { approvedBy: 'owner (test)' });
     assert.equal(srv.ledger.listAttention().events.length, before, 'pre-boundary adjustment not captured');
     const e = (await admin.get('/api/attention')).json.events[0];
@@ -162,8 +162,8 @@ describe('Go-live safeguards (production ledger, activation boundary)', () => {
     await login();
     // Telegram re-delivers a backlog after reconnect: older and already-seen messages.
     tg.state.updates.push(
-      { update_id: 77001, message: { message_id: ++mid, date: BOUNDARY_S - 3600, chat: { id: Number(CHIME) }, from: { id: 5 }, text: chime('Pre Boundary', '99') } },
-      { update_id: 77002, message: { message_id: ++mid, date: BOUNDARY_S + 3600, chat: { id: Number(CHIME) }, from: { id: 5 }, text: chime('Backlog After Boundary', '99') } },
+      { update_id: 77001, message: { message_id: ++mid, date: BOUNDARY_S - 3600, chat: { id: Number(CHIME) }, from: { id: 777000111 }, text: chime('Pre Boundary', '99') } },
+      { update_id: 77002, message: { message_id: ++mid, date: BOUNDARY_S + 3600, chat: { id: Number(CHIME) }, from: { id: 777000111 }, text: chime('Backlog After Boundary', '99') } },
     );
     for (const u of tg.state.updates) await srv.telegram.handleUpdate(u);
     assert.equal(JSON.stringify([srv.ledger.listPayments(), srv.ledger.listSettlements(), srv.ledger.listAttention()]), before,

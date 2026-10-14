@@ -3,7 +3,7 @@
 // requests, and handles the "Completed" button. Exactly one update source runs:
 // long polling OR the webhook route, chosen by PICASSO_TELEGRAM_MODE.
 
-const { classifyMessage } = require('./parser');
+const { decideMessage } = require('./incoming');
 const { cashoutText, completedKeyboard, NO_KEYBOARD } = require('./messages');
 
 const OUTBOX_INTERVAL_MS = 3_000;
@@ -85,31 +85,25 @@ class TelegramBot {
     }
   }
 
-  handleMessage(updateId, msg, { backfill = false } = {}) {
+  // options:
+  //   backfill: an owner-approved historical import (server/backfill.js)
+  //   listener: from the user-account listener, whose own catch-up window and
+  //             the ingest endpoint's age limit replace the startup check below
+  handleMessage(updateId, msg, { backfill = false, listener = false } = {}) {
     const chatId = String(msg.chat?.id ?? '');
     const base = { updateId, kind: 'message', chatId, messageId: msg.message_id ?? null };
-    const method = this.cfg.incomingMethodByChat.get(chatId);
-    if (!method) {
-      // Unrelated chats (and cash-out groups) are never parsed.
-      return this.ledger.logTelegramEvent({ ...base, outcome: this.cfg.configuredChats.has(chatId) ? 'ignored_not_incoming_group' : 'ignored_unconfigured_chat' });
-    }
-    if (String(msg.from?.id) === this.botId) return this.ledger.logTelegramEvent({ ...base, outcome: 'ignored_own_message' });
-    if (!Number.isInteger(msg.message_id) || !Number.isInteger(msg.date)) return this.ledger.logTelegramEvent({ ...base, outcome: 'rejected_malformed_update' });
+    const d = decideMessage({ ...this.cfg, ownBotId: this.botId }, msg);
+    if (d.decision === 'ignore') return this.ledger.logTelegramEvent({ ...base, outcome: d.outcome });
+    const method = d.method;
 
-    // Financial activation boundary (PICASSO_PAYMENT_START_AT), applied to the
-    // original Telegram date before any record is created. Absolute epoch
-    // comparison, so time zones cannot skew it.
-    if (this.cfg.paymentStartMs != null && msg.date * 1000 < this.cfg.paymentStartMs) {
-      return this.ledger.logTelegramEvent({ ...base, outcome: 'ignored_before_cutoff' });
-    }
-    // Never process history: anything sent before the bridge started (e.g. a
-    // backlog Telegram queued while we were offline) is logged and skipped.
-    if (!backfill && this.startedAt && msg.date * 1000 < this.startedAt - HISTORY_GRACE_MS) {
+    // Bot API path: never process a backlog Telegram queued while we were
+    // offline (anything sent before the bridge started) unless approved.
+    if (!backfill && !listener && this.startedAt && msg.date * 1000 < this.startedAt - HISTORY_GRACE_MS) {
       return this.ledger.logTelegramEvent({ ...base, outcome: 'ignored_historical' });
     }
 
-    const parsed = classifyMessage(msg.text, method, { venmoParser: this.cfg.venmoParser });
-    if (parsed.kind === 'attention') {
+    const parsed = d.parsed;
+    if (d.decision === 'attention') {
       const r = this.ledger.createAttentionEvent({
         method, eventType: parsed.eventType, amountCents: parsed.amountCents, reason: parsed.reason, text: msg.text,
         messageAt: new Date(msg.date * 1000).toISOString(), chatId, messageId: msg.message_id, parserVersion: parsed.parserVersion,
@@ -118,12 +112,12 @@ class TelegramBot {
       if (r.outcome === 'created') this.events.publish(['attention']);
       return r;
     }
-    if (parsed.kind === 'cashout_request') {
+    if (d.decision === 'cashout_request') {
       // Shared group: cash-out requests are created only from the dashboard and
       // are never turned into payments or attention events from chat text.
       return this.ledger.logTelegramEvent({ ...base, outcome: 'ignored_cashout_request', detail: `method=${method}` });
     }
-    if (parsed.kind !== 'payment') {
+    if (d.decision !== 'payment') {
       // Reason and length only; ordinary chat text is not stored.
       return this.ledger.logTelegramEvent({ ...base, outcome: `rejected_${parsed.reason}`, detail: `method=${method} len=${String(msg.text ?? '').length}` });
     }

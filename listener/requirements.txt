@@ -1,0 +1,4 @@
+# Picasso listener runtime. Install into its private virtualenv only:
+#   /opt/picasso-telegram-listener/venv/bin/pip install --require-hashes -r requirements.lock
+# (generate requirements.lock with hashes on the VPS: pip-compile --generate-hashes)
+telethon==1.44.0

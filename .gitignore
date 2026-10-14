@@ -42,3 +42,9 @@ Thumbs.db
 
 # ---- Pre-auth static prototype (contained hardcoded demo password hashes) ---
 legacy-static-demo/
+
+# ---- Python listener ------------------------------------------------------
+__pycache__/
+*.pyc
+venv/
+.venv/

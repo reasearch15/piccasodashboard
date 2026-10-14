@@ -1,6 +1,6 @@
 'use strict';
 const path = require('node:path');
-const { loadTelegramConfig } = require('./telegram/config');
+const { loadTelegramConfig, loadListenerConfig } = require('./telegram/config');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -51,9 +51,19 @@ function loadConfig(env = process.env) {
     telegram.paymentStartMs = paymentStartMs;
     // Real Telegram data may only ever land in the production ledger.
     if (telegram.apiBase === 'https://api.telegram.org' && ledgerMode !== 'production') throw new Error('Live Telegram requires PICASSO_LEDGER_MODE=production.');
-    if (telegram.ingestSecret && ledgerMode !== 'production') throw new Error('The user-account listener ingest requires PICASSO_LEDGER_MODE=production.');
     if (telegram.venmoParser === 'provisional' && ledgerMode === 'production') throw new Error('The provisional Venmo parser is not allowed in production; Venmo messages go to Admin Attention until a verified format exists.');
   }
+
+  const listener = loadListenerConfig(env);
+  if (listener.enabled) {
+    listener.paymentStartMs = paymentStartMs;
+    if (ledgerMode !== 'production') throw new Error('The user-account listener ingest requires PICASSO_LEDGER_MODE=production.');
+    if (listener.venmoParser === 'provisional') throw new Error('The provisional Venmo parser is not allowed in production; Venmo messages go to Admin Attention until a verified format exists.');
+    if (!listener.sourceSenderIds.size) throw new Error('PICASSO_PAYMENT_SOURCE_SENDER_IDS is required with the listener: the numeric Telegram ID(s) allowed to post payment notifications (Larry\'s bot).');
+    if (paymentStartMs == null) throw new Error('PICASSO_PAYMENT_START_AT is required with the listener.');
+  }
+  // The StaffHelp bot path applies the same payment-sender verification.
+  if (telegram.enabled) telegram.sourceSenderIds = listener.enabled ? listener.sourceSenderIds : new Set();
 
   return {
     host: env.PICASSO_HOST || '127.0.0.1',
@@ -76,6 +86,7 @@ function loadConfig(env = process.env) {
     paymentStartMs,
     paymentStartRaw: startRaw || null,
     telegram,
+    listener,
   };
 }
 

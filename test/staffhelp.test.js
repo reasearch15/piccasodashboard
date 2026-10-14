@@ -23,6 +23,7 @@ const env = base => ({
   PICASSO_TELEGRAM_ALLOW_SHARED_GROUPS: 'true',
   PICASSO_TELEGRAM_COMPLETER_IDS: `${STAFF_TG},${ADMIN_TG}`,
   PICASSO_LISTENER_INGEST_SECRET: SECRET,
+  PICASSO_PAYMENT_SOURCE_SENDER_IDS: '777000111',
 });
 const chimePayment = (sender, amount) =>
   ['\u{1F7E2} Hi $Synthetic-Payee-9,', `You received $${amount} from ${sender}.`, '08:39 PM - 14 Oct 2026', '➕ Total In: 15.00$', '➖ Total Out: 0.00$'].join('\n');
@@ -32,7 +33,7 @@ describe('StaffHelp bot: completion, admin cancellation, shared groups', () => {
   let tg, srv, admin, staff;
   const now = () => Math.floor(Date.now() / 1000);
   const ingest = body => fetch(`${srv.base}/api/ingest/telegram-message`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Picasso-Ingest-Secret': SECRET }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Picasso-Ingest-Secret': SECRET }, body: JSON.stringify({ senderId: 777000111, ...body }),
   }).then(r => r.json());
   const view = async id => (await admin.get('/api/cashouts')).json.cashouts.find(o => o.id === id);
   const totals = async m => (await admin.get('/api/calculations')).json.totals[m];
@@ -277,8 +278,8 @@ describe('StaffHelp bot: completion, admin cancellation, shared groups', () => {
     await ingest(m);
     assert.equal(srv.ledger.listPayments().filter(p => p.name === 'Once Only').length, 1);
     const n = srv.ledger.listPayments().length;
-    await ingest({ chatId: CHIME, messageId: ++mid, date: now() - 7200, text: chimePayment('Old Backlog', '9') });
-    assert.equal(lastEvent(), 'ignored_historical');
+    await ingest({ chatId: CHIME, messageId: ++mid, date: now() - 13 * 3600, text: chimePayment('Old Backlog', '9') });
+    assert.equal(lastEvent(), 'ignored_too_old_for_live');
     assert.equal(srv.ledger.listPayments().length, n);
   });
 });

@@ -98,19 +98,19 @@ describe('Listener ingest endpoint (for a future Telethon listener)', () => {
   let tg, srv, mid = 700;
   const now = () => Math.floor(Date.now() / 1000);
   const ingest = (body, secret = SECRET) => fetch(`${srv.base}/api/ingest/telegram-message`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Picasso-Ingest-Secret': secret }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Picasso-Ingest-Secret': secret }, body: JSON.stringify({ senderId: 777000111, ...body }),
   });
 
   before(async () => {
     tg = await startMockTelegram(TOKEN);
-    srv = await startServer(env(tg.base, { PICASSO_LISTENER_INGEST_SECRET: SECRET }));
+    srv = await startServer(env(tg.base, { PICASSO_LISTENER_INGEST_SECRET: SECRET, PICASSO_PAYMENT_SOURCE_SENDER_IDS: '777000111' }));
     await srv.telegram.init();
   });
   after(async () => { await srv.close(); await tg.close(); });
 
   it('creates a red pending Chime payment, never auto-accepted, with timestamp, parser version and recipient', async () => {
     const date = now() - 5;
-    const r = await ingest({ chatId: CHIME_IN, messageId: ++mid, date, text: fixture({ sender: 'Synthetic Sender.', amount: '14' }), senderId: 9001 });
+    const r = await ingest({ chatId: CHIME_IN, messageId: ++mid, date, text: fixture({ sender: 'Synthetic Sender.', amount: '14' }), senderId: 777000111 });
     assert.equal(r.status, 200);
     assert.deepEqual(await r.json(), { outcome: 'created' });
     const p = srv.ledger.listPayments()[0];
@@ -142,7 +142,7 @@ describe('Listener ingest endpoint (for a future Telethon listener)', () => {
     assert.equal(srv.ledger.listPayments().length, before);
     assert.equal(srv.ledger.listAttention().events.length, 1, 'only the adjustment goes to Admin Attention');
     const outcomes = srv.ledger.db.prepare('SELECT outcome FROM telegram_events ORDER BY id DESC LIMIT 5').all().map(r => r.outcome).reverse();
-    assert.deepEqual(outcomes, ['rejected_summary_only', 'attention_created', 'rejected_unexpected_line', 'ignored_historical', 'ignored_unconfigured_chat']);
+    assert.deepEqual(outcomes, ['rejected_summary_only', 'attention_created', 'rejected_unexpected_line', 'ignored_too_old_for_live', 'ignored_unconfigured_chat']);
   });
 
   it('rejects wrong secrets and bad input; route does not exist without a secret', async () => {

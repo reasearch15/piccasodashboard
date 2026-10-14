@@ -224,28 +224,75 @@ function createApp(config) {
     } });
   }
 
-  // Listener ingest: a separate local process (Telethon user account) posts
-  // raw group messages here. Loopback only, shared-secret authenticated; the
-  // message then goes through the exact same classify/dedupe path as Bot API
-  // updates. Absent unless PICASSO_LISTENER_INGEST_SECRET is set.
-  if (tg.enabled && tg.ingestSecret) {
-    routes.push({ method: 'POST', path: '/api/ingest/telegram-message', public: true, webhook: true, handler: ({ req, body }) => {
+  // ---- User-account listener input ------------------------------------------
+  // A separate local process (Telethon user account; see listener/) posts raw
+  // group messages here. Enabled by PICASSO_LISTENER_INGEST_SECRET and
+  // independent of the StaffHelp bot (works with PICASSO_TELEGRAM_MODE=off).
+  // Loopback only, never via a proxy, shared secret on every request; the
+  // message then goes through the same decision path as every other source.
+  const lis = config.listener;
+  if (lis.enabled) {
+    const ingestor = telegram ?? new TelegramBot({ config: { ...lis }, ledger, events, api: null });
+    if (!telegram) ingestor.botId = lis.staffhelpBotId;
+    const authorizeListener = req => {
       const ip = req.socket.remoteAddress || '';
-      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip) || req.headers['x-forwarded-for']) throw new HttpError(403, 'Forbidden.');
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip) || req.headers['x-forwarded-for'] || req.headers['x-real-ip']) throw new HttpError(403, 'Forbidden.');
       const given = Buffer.from(String(req.headers['x-picasso-ingest-secret'] || ''));
-      const expected = Buffer.from(tg.ingestSecret);
+      const expected = Buffer.from(lis.ingestSecret);
       if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) throw new HttpError(401, 'Unauthorized.');
+    };
+    const validChat = v => /^-?\d{1,20}$/.test(String(v));
+
+    routes.push({ method: 'POST', path: '/api/ingest/telegram-message', public: true, webhook: true, handler: ({ req, body }) => {
+      authorizeListener(req);
       const { chatId, messageId, date, text, senderId, edited } = body;
-      if (!/^-?\d{1,20}$/.test(String(chatId)) || !Number.isInteger(messageId) || !Number.isInteger(date) || (text != null && typeof text !== 'string')) {
+      if (!validChat(chatId) || !Number.isInteger(messageId) || messageId <= 0 || !Number.isInteger(date) || (text != null && typeof text !== 'string')
+          || (senderId != null && !/^-?\d{1,20}$/.test(String(senderId)))) {
         throw new HttpError(400, 'Invalid message.');
       }
+      const base = { kind: 'listener_message', chatId: String(chatId), messageId };
       // Edits never create or change records, even for messages after the cutoff.
       if (edited) {
-        ledger.logTelegramEvent({ kind: 'edited_message', outcome: 'ignored_edit', chatId: String(chatId), messageId });
+        ledger.logTelegramEvent({ ...base, outcome: 'ignored_edit' });
         return { body: { outcome: 'ignored_edit' } };
       }
-      const r = telegram.handleMessage(null, { message_id: messageId, date, text, chat: { id: Number(chatId) }, from: { id: senderId ?? null } });
+      // Live input is bounded in age: older messages need an approved import.
+      const ageMs = Date.now() - date * 1000;
+      if (ageMs > lis.maxAgeMs) {
+        ledger.logTelegramEvent({ ...base, outcome: 'ignored_too_old_for_live' });
+        return { body: { outcome: 'ignored_too_old_for_live' } };
+      }
+      if (ageMs < -5 * 60_000) {
+        ledger.logTelegramEvent({ ...base, outcome: 'rejected_future_date' });
+        return { body: { outcome: 'rejected_future_date' } };
+      }
+      const r = ingestor.handleMessage(null, { message_id: messageId, date, text, chat: { id: Number(chatId) }, from: { id: senderId ?? null } }, { listener: true });
       return { body: { outcome: r?.outcome ?? 'logged' } };
+    } });
+
+    // Gap report: the listener could not safely catch up on some messages (for
+    // example after long downtime). Recorded in Admin Attention so an admin can
+    // run an approved import; nothing is imported automatically.
+    routes.push({ method: 'POST', path: '/api/ingest/telegram-gap', public: true, webhook: true, handler: ({ req, body }) => {
+      authorizeListener(req);
+      const { chatId, fromMessageId, toMessageId, fromDate, toDate, count } = body;
+      const method = lis.incomingMethodByChat.get(String(chatId));
+      if (!method || !Number.isInteger(fromMessageId) || !Number.isInteger(toMessageId) || fromMessageId <= 0 || toMessageId < fromMessageId
+          || !Number.isInteger(fromDate) || !Number.isInteger(toDate) || !Number.isInteger(count) || count < 0) {
+        throw new HttpError(400, 'Invalid gap report.');
+      }
+      const text = `Telegram ingestion gap in the ${method} group: ${count} message(s), IDs ${fromMessageId}-${toMessageId}, `
+        + `${new Date(fromDate * 1000).toISOString()} to ${new Date(toDate * 1000).toISOString()}, were NOT imported automatically. `
+        + 'Review them with an approved historical import (preview first).';
+      // A negative synthetic message ID can never collide with a real message,
+      // so the missed messages themselves stay importable later.
+      const r = ledger.createAttentionEvent({
+        method, eventType: 'unrecognized_financial', amountCents: null, reason: 'ingestion_gap', text,
+        messageAt: new Date(toDate * 1000).toISOString(), chatId: String(chatId), messageId: -fromMessageId, parserVersion: 'listener-gap-v1',
+      });
+      ledger.logTelegramEvent({ kind: 'listener_gap', outcome: r.outcome === 'created' ? 'gap_reported' : 'duplicate_gap', chatId: String(chatId), messageId: fromMessageId, refId: r.id ?? null, detail: `count=${count} to=${toMessageId}` });
+      if (r.outcome === 'created') events.publish(['attention']);
+      return { body: { outcome: r.outcome } };
     } });
   }
 

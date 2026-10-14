@@ -111,7 +111,7 @@ function makeInstall({ v2Change = 'touch' } = {}) {
   fs.writeFileSync(p('picasso.env'), [
     'NODE_ENV=production', 'PICASSO_LEDGER_MODE=production', 'PICASSO_PAYMENT_START_AT=2026-10-13T00:00:00+05:45',
     'PICASSO_HOST=127.0.0.1', 'PICASSO_PORT=3300', `PICASSO_DATA_DIR=${fwd(p('data'))}`,
-    'PICASSO_TELEGRAM_MODE=off', `PICASSO_TELEGRAM_BOT_TOKEN=${SECRET_TOKEN}`, `PICASSO_LISTENER_INGEST_SECRET=${SECRET_INGEST}`,
+    'PICASSO_TELEGRAM_MODE=off', `PICASSO_TELEGRAM_BOT_TOKEN=${SECRET_TOKEN}`, `PICASSO_LISTENER_INGEST_SECRET=${SECRET_INGEST}`, 'PICASSO_TELEGRAM_CHIME_INCOMING_CHAT_ID=-5000000501', 'PICASSO_TELEGRAM_VENMO_INCOMING_CHAT_ID=-5000000502', 'PICASSO_PAYMENT_SOURCE_SENDER_IDS=777000111',
     'PICASSO_COOKIE_SECURE=auto', 'PICASSO_TRUST_PROXY=true', '',
   ].join('\n'));
 
@@ -234,6 +234,19 @@ describe('deploy.sh', { skip: !BASH && 'bash not available' }, () => {
       assert.equal(r2.status, 0, r2.stdout + r2.stderr);
       assert.equal(t.head(), t.v2);
       assert.match(t.mockLog(), /systemctl restart picasso-dashboard/);
+    } finally { t.cleanup(); }
+  });
+
+  it('incomplete listener configuration is caught before restart (code restored, nothing restarted)', () => {
+    const t = makeInstall();
+    try {
+      const env = fs.readFileSync(t.p('picasso.env'), 'utf8');
+      fs.writeFileSync(t.p('picasso.env'), env.replace('PICASSO_PAYMENT_SOURCE_SENDER_IDS=777000111\n', ''));
+      const r = t.run();
+      assert.equal(r.code, 8, r.out);
+      assert.match(r.out, /PICASSO_PAYMENT_SOURCE_SENDER_IDS is required/);
+      assert.equal(t.head(), t.v1);
+      assert.ok(!/systemctl restart/.test(t.mockLog()));
     } finally { t.cleanup(); }
   });
 

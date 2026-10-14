@@ -84,4 +84,39 @@ function loadTelegramConfig(env = process.env) {
   };
 }
 
-module.exports = { loadTelegramConfig };
+// ---- User-account listener input (independent of the StaffHelp bot) --------
+// Enabled by PICASSO_LISTENER_INGEST_SECRET. Needs only the two incoming group
+// IDs, so live payment ingestion works with PICASSO_TELEGRAM_MODE=off.
+function loadListenerConfig(env = process.env) {
+  const ingestSecret = env.PICASSO_LISTENER_INGEST_SECRET || '';
+  if (!ingestSecret) return { enabled: false };
+  const errors = [];
+  if (!SECRET_RE.test(ingestSecret)) errors.push('PICASSO_LISTENER_INGEST_SECRET must be 32+ characters of A-Z a-z 0-9 _ -.');
+  const chime = (env.PICASSO_TELEGRAM_CHIME_INCOMING_CHAT_ID || '').trim();
+  const venmo = (env.PICASSO_TELEGRAM_VENMO_INCOMING_CHAT_ID || '').trim();
+  if (!CHAT_ID_RE.test(chime)) errors.push('PICASSO_TELEGRAM_CHIME_INCOMING_CHAT_ID must be a numeric Telegram chat ID.');
+  if (!CHAT_ID_RE.test(venmo)) errors.push('PICASSO_TELEGRAM_VENMO_INCOMING_CHAT_ID must be a numeric Telegram chat ID.');
+  if (chime && chime === venmo) errors.push('Chime and Venmo incoming payment groups must be different chats.');
+  const ids = name => (env[name] || '').split(',').map(s => s.trim()).filter(Boolean);
+  const senders = ids('PICASSO_PAYMENT_SOURCE_SENDER_IDS');
+  if (senders.some(id => !/^\d{1,20}$/.test(id))) errors.push('PICASSO_PAYMENT_SOURCE_SENDER_IDS must be numeric Telegram user IDs (e.g. Larry\'s bot).');
+  const ownBot = (env.PICASSO_TELEGRAM_STAFFHELP_BOT_ID || '').trim();
+  if (ownBot && !/^\d{1,20}$/.test(ownBot)) errors.push('PICASSO_TELEGRAM_STAFFHELP_BOT_ID must be a numeric Telegram user ID.');
+  const maxAge = env.PICASSO_LISTENER_MAX_AGE_HOURS === undefined || env.PICASSO_LISTENER_MAX_AGE_HOURS === '' ? 12 : Number(env.PICASSO_LISTENER_MAX_AGE_HOURS);
+  if (!Number.isInteger(maxAge) || maxAge < 1 || maxAge > 168) errors.push('PICASSO_LISTENER_MAX_AGE_HOURS must be a whole number of hours from 1 to 168.');
+  const venmoParser = env.PICASSO_VENMO_PARSER || 'review';
+  if (!['review', 'provisional'].includes(venmoParser)) errors.push('PICASSO_VENMO_PARSER must be review or provisional.');
+  if (errors.length) throw new Error(`Invalid listener configuration:\n - ${errors.join('\n - ')}`);
+  return {
+    enabled: true,
+    ingestSecret,
+    venmoParser,
+    incomingMethodByChat: new Map([[chime, 'Chime'], [venmo, 'Venmo']]),
+    configuredChats: new Set([chime, venmo]),
+    sourceSenderIds: new Set(senders),
+    staffhelpBotId: ownBot || null,
+    maxAgeMs: maxAge * 3_600_000,
+  };
+}
+
+module.exports = { loadTelegramConfig, loadListenerConfig };
