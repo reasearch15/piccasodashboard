@@ -9,8 +9,10 @@ const { loadTelegramConfig } = require('../server/telegram/config');
 
 // Synthetic fixtures modelled on the real Larry's BOT Chime layout. Names and
 // tags are invented; nothing here comes from a real conversation.
-const fixture = ({ tag = 'Test-Payee-1', amount = '14.0', sender = 'Amanda M.', time = '08:39 PM - 14 Oct 2026', totalIn = '15.00', totalOut = '0.00', extra = [] } = {}) =>
-  [`\u{1F7E2} Hi $${tag},`, `You received $${amount} from ${sender}`, time, `➕ Total In: ${totalIn}$`, `➖ Total Out: ${totalOut}$`, ...extra].filter(Boolean).join('\n');
+// inSep / outSep: the text between "Total In"/"Total Out" and the amount. The
+// bot has been seen writing both "Total In: 15.00$" and "Total In : 15.00$".
+const fixture = ({ tag = 'Test-Payee-1', amount = '14.0', sender = 'Amanda M.', time = '08:39 PM - 14 Oct 2026', totalIn = '15.00', totalOut = '0.00', inSep = ': ', outSep = ': ', extra = [] } = {}) =>
+  [`\u{1F7E2} Hi $${tag},`, `You received $${amount} from ${sender}`, time, `➕ Total In${inSep}${totalIn}$`, `➖ Total Out${outSep}${totalOut}$`, ...extra].filter(Boolean).join('\n');
 
 describe('Chime parser (chime-v1)', () => {
   it('reads the individual payment, sender and recipient from the real layout', () => {
@@ -27,6 +29,42 @@ describe('Chime parser (chime-v1)', () => {
   it('ignores Total In / Total Out: the payment amount never comes from the summary', () => {
     const r = parseChimeMessage(fixture({ amount: '14.0', totalIn: '9,999.00', totalOut: '123.45' }));
     assert.equal(r.amountCents, 1400);
+  });
+
+  it('regression: accepts "Total In :" / "Total Out :" (space before the colon) exactly like "Total In:"', () => {
+    const expected = { ok: true, name: 'Amanda M.', amountCents: 1400, recipient: '$Test-Payee-1', parserVersion: 'chime-v1' };
+    for (const [inSep, outSep] of [[': ', ': '], [' : ', ': '], [': ', ' : '], [' : ', ' : '], ['  :  ', ' :'], [':', ':']]) {
+      const text = fixture({ inSep, outSep });
+      assert.deepEqual(parseChimeMessage(text), expected, JSON.stringify([inSep, outSep]));
+      assert.equal(classifyMessage(text, 'Chime').kind, 'payment', JSON.stringify([inSep, outSep]));
+    }
+    // The summary still never supplies the payment amount.
+    assert.equal(parseChimeMessage(fixture({ inSep: ' : ', totalIn: '9,999.00', outSep: ' : ', totalOut: '123.45' })).amountCents, 1400);
+  });
+
+  it('regression: the looser summary match does not loosen anything else', () => {
+    const cases = [
+      [fixture({ inSep: ' : ', amount: '14.000' }), 'malformed'],                       // bad payment amount
+      [fixture({ inSep: ' : ', amount: 'fourteen' }), 'malformed'],                     // no amount
+      [fixture({ inSep: ' : ', tag: '' }), 'unexpected_line'],                           // broken greeting
+      [fixture({ inSep: ' : ' }).replace(/^.*Hi.*\n/u, ''), 'missing_recipient'],        // no greeting
+      [fixture({ inSep: ' : ', extra: ['You received $5.00 from Someone Else.'] }), 'ambiguous_amount'], // two payments
+      [fixture({ inSep: ' : ', extra: ['Note: reversed'] }), 'unexpected_line'],         // unknown line
+      [fixture({ inSep: ' : ', totalIn: 'abc' }), 'unexpected_line'],                    // summary without a number
+      [fixture({ inSep: ' - ' }), 'unexpected_line'],                                     // not a colon
+      [fixture({ inSep: ' ; ' }), 'unexpected_line'],
+      [fixture({ inSep: ' :: ' }), 'unexpected_line'],
+    ];
+    for (const [text, reason] of cases) assert.equal(parseChimeMessage(text).reason, reason, text);
+    // Summary-only messages (no payment line) still create no record.
+    const summary = ['\u{1F7E2} Hi $Test-Payee-1,', '08:39 PM - 14 Oct 2026', '➕ Total In : 15.00$', '➖ Total Out : 0.00$'].join('\n');
+    assert.deepEqual(classifyMessage(summary, 'Chime'), { kind: 'none', reason: 'summary_only' });
+    // Adjustments and cash-out requests are unaffected.
+    const adj = classifyMessage("Larry's BOT\nTotal In adjusted by -8.00$", 'Chime');
+    assert.deepEqual([adj.kind, adj.eventType, adj.amountCents], ['attention', 'total_in_adjustment', -800]);
+    assert.equal(classifyMessage('!! Cashout Request !!\nTag name : $x\nAmoun : $5', 'Chime').kind, 'cashout_request');
+    // Venmo behaviour is unchanged: the Chime layout is never a Venmo payment.
+    assert.notEqual(classifyMessage(fixture({ inSep: ' : ' }), 'Venmo', { venmoParser: 'review' }).kind, 'payment');
   });
 
   it('keeps an initial\'s period but drops a sentence period', () => {
@@ -154,6 +192,19 @@ describe('Listener ingest endpoint (for a future Telethon listener)', () => {
     const srv2 = await startServer(env(tg2.base));
     try { assert.equal((await fetch(`${srv2.base}/api/ingest/telegram-message`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 404); }
     finally { await srv2.close(); await tg2.close(); }
+  });
+
+  it('regression: a verified "Total In :" notification becomes a PENDING payment (never auto-accepted), exactly once', async () => {
+    const before = srv.ledger.listPayments().length;
+    const attentionBefore = srv.ledger.listAttention().events.length;
+    const body = { chatId: CHIME_IN, messageId: ++mid, date: now() - 5, text: fixture({ sender: 'Spaced Colon', amount: '14.0', inSep: ' : ' }) };
+    assert.deepEqual(await (await ingest(body)).json(), { outcome: 'created' });
+    assert.deepEqual(await (await ingest(body)).json(), { outcome: 'duplicate' });
+    const p = srv.ledger.listPayments().find(x => x.name === 'Spaced Colon');
+    assert.deepEqual([p.method, p.amountCents, p.status, p.acceptedBy ?? null, p.settled], ['Chime', 1400, 'pending', null, false]);
+    assert.equal(srv.ledger.listPayments().length, before + 1);
+    assert.equal(srv.ledger.listAttention().events.length, attentionBefore, 'no Admin Attention event for a valid notification');
+    assert.equal(srv.ledger.calculations().Chime.acceptedIn, srv.ledger.listPayments().filter(x => x.method === 'Chime' && x.status === 'accepted').reduce((n, x) => n + x.amountCents, 0), 'pending payments add nothing to Accepted In');
   });
 
   it('staff can accept an ingested payment; it is never accepted automatically', async () => {

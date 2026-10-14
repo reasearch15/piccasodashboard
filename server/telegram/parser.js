@@ -20,7 +20,7 @@ const CHIME_PARSER_VERSION = 'chime-v1';
 const CHIME_GREETING = /^(?:\p{Extended_Pictographic}️?\s*)?Hi \$(?<tag>[A-Za-z0-9][A-Za-z0-9-]{0,63}),?$/u;
 const CHIME_RECEIVED = /^You received \$(?<dollars>\d{1,3}(?:,\d{3})+|\d{1,9})(?:\.(?<cents>\d{1,2}))? from (?<name>\p{L}[\p{L} .'-]{0,78})$/u;
 const CHIME_TIME = /^\d{1,2}:\d{2}\s?(?:AM|PM) - \d{1,2} [A-Z][a-z]{2} \d{4}$/;
-const CHIME_TOTAL = /^(?:\p{Extended_Pictographic}️?\s*)?Total (?:In|Out): -?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\$$/u;
+const CHIME_TOTAL = /^(?:\p{Extended_Pictographic}️?\s*)?Total (?:In|Out)\s*:\s*-?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\$$/u;
 
 // "Amanda M." keeps the period of an initial; "Amanda Moore." loses the
 // sentence-ending one.
