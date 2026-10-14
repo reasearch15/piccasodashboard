@@ -1,0 +1,44 @@
+# ---- Secrets and local configuration --------------------------------------
+.env
+.env.*
+!.env.example
+deploy/*.env
+!deploy/*.env.example
+*.pem
+*.key
+secrets/
+
+# ---- Databases (accounts, sessions, ledgers): never committed --------------
+data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# ---- Telegram session files (Telethon / Pyrogram) ---------------------------
+*.session
+*.session-journal
+
+# ---- Backups, exports, logs, temp -------------------------------------------
+backups/
+*.bak
+*.backup
+*.jsonl
+logs/
+*.log
+tmp/
+.tmp*
+*.tmp
+
+# ---- Tooling ---------------------------------------------------------------
+node_modules/
+.claude/
+.DS_Store
+Thumbs.db
+
+# ---- Pre-auth static prototype (contained hardcoded demo password hashes) ---
+legacy-static-demo/

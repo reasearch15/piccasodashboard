@@ -1,0 +1,9 @@
+.login-page main{margin:0 auto;max-width:420px;min-height:100vh;display:flex;align-items:center;padding:24px 16px}
+.login-card{width:100%;padding:28px}
+.login-card .brand{margin:0 0 6px}
+.login-card .btn[type=submit]{width:100%;margin-top:6px;padding:11px 13px}
+.login-card .btn[disabled]{opacity:.65;cursor:default}
+.password-row{display:flex;gap:8px}
+.password-row input{flex:1;min-width:0}
+.password-row .btn{flex:none;min-width:68px}
+.login-error{padding:11px 14px;margin-bottom:16px;border:1px solid #f2bfc4;border-radius:8px;background:#fff5f5;color:#b4232e;font-size:13px}

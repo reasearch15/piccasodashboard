@@ -1,0 +1,14 @@
+{
+  "name": "picasso-dashboard",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Picasso Dashboard: local demo ledger with real admin/staff authentication",
+  "engines": {
+    "node": ">=24.7.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "init-admin": "node --env-file-if-exists=.env server/init-admin.js",
+    "test": "node --test settlement-core.test.js test/auth.test.js test/telegram.test.js test/attention.test.js test/chime.test.js test/golive.test.js test/production.test.js"
+  }
+}

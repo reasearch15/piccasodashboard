@@ -1,0 +1,37 @@
+# /etc/systemd/system/picasso-dashboard.service
+# Independent service: own user, own directory, own database, own port.
+# Does not reference or depend on TeleLedger, Atlas, AppBeg or any other unit.
+[Unit]
+Description=Picasso Dashboard (payment.altast.work)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=picasso
+Group=picasso
+WorkingDirectory=/opt/picasso-dashboard/app
+# Secrets live outside the Git checkout, readable only by root/picasso.
+EnvironmentFile=/etc/picasso-dashboard/picasso.env
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+# Gives in-flight requests and SQLite time to close cleanly.
+TimeoutStopSec=20
+KillSignal=SIGTERM
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/picasso-dashboard/data /opt/picasso-dashboard/backups
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Log In · Picasso Dashboard</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="login.css"></head><body class="login-page">
+<main><form id="login-form" class="panel login-card" novalidate>
+<div class="brand">Picasso Dashboard</div><div class="muted field">Sign in with your admin or staff account.</div>
+<div id="login-error" class="login-error hidden" role="alert"></div>
+<div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" required autofocus></div>
+<div class="field"><label for="password">Password</label><div class="password-row"><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required><button type="button" id="toggle-password" class="btn light" aria-controls="password" aria-pressed="false">Show</button></div></div>
+<button type="submit" id="login-submit" class="btn">Log In</button>
+</form></main>
+<script src="login.js"></script></body></html>
