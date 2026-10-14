@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server/index.js",
     "init-admin": "node --env-file-if-exists=.env server/init-admin.js",
-    "test": "node --test settlement-core.test.js test/auth.test.js test/telegram.test.js test/attention.test.js test/chime.test.js test/golive.test.js test/production.test.js test/staffhelp.test.js test/deploy.test.js test/listener.test.js test/testcashout.test.js",
+    "test": "node --test settlement-core.test.js test/auth.test.js test/telegram.test.js test/attention.test.js test/chime.test.js test/golive.test.js test/production.test.js test/staffhelp.test.js test/deploy.test.js test/listener.test.js test/testcashout.test.js test/cashout-workflow.test.js",
     "test:listener": "python -m unittest discover -s listener/tests -t listener"
   }
 }

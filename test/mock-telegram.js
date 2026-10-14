@@ -12,13 +12,16 @@ async function startMockTelegram(token) {
     nextMessageId: 5000,
     updates: [],
     botId: 424242,
+    delayMs: {},       // method -> milliseconds before answering (simulates an in-flight request)
   };
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', c => { body += c; });
     req.on('end', () => {
       const m = /^\/bot([^/]+)\/(\w+)$/.exec(req.url);
-      const reply = (status, payload) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(payload)); };
+      const delay = m ? state.delayMs[m[2]] || 0 : 0;
+      const send = (status, payload) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(payload)); };
+      const reply = (status, payload) => (delay ? setTimeout(() => send(status, payload), delay) : send(status, payload));
       if (!m || m[1] !== token) return reply(401, { ok: false, error_code: 401, description: 'Unauthorized' });
       const method = m[2];
       const params = body ? JSON.parse(body) : {};
